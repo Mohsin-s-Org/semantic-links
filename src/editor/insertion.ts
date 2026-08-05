@@ -6,6 +6,10 @@ import {
 } from "@codemirror/state";
 import type { App } from "obsidian";
 import type { LinkPathMode } from "../settings/types.ts";
+import {
+  isInsideWikilink,
+  isProtectedAnchor
+} from "./protected-context.ts";
 
 export const PLUGIN_LINK_INSERTION = Annotation.define<boolean>();
 
@@ -29,6 +33,7 @@ export type InsertWikilinkFailureCode =
   | "invalid-range"
   | "changed-anchor"
   | "already-linked"
+  | "protected-context"
   | "target-not-found"
   | "invalid-target"
   | "dispatch-failed";
@@ -66,6 +71,9 @@ export function insertVerifiedWikilink(
   }
   if (isInsideWikilink(documentText, request.anchorStart, request.anchorEnd)) {
     return { ok: false, code: "already-linked" };
+  }
+  if (isProtectedAnchor(documentText, request.anchorStart, request.anchorEnd)) {
+    return { ok: false, code: "protected-context" };
   }
 
   const target = app.metadataCache.getFirstLinkpathDest(
@@ -118,18 +126,6 @@ export function insertVerifiedWikilink(
     insertedText,
     targetPath: target.path
   };
-}
-
-function isInsideWikilink(documentText: string, start: number, end: number): boolean {
-  const before = documentText.slice(0, start);
-  const opening = before.lastIndexOf("[[");
-  if (opening <= before.lastIndexOf("]]")) {
-    return false;
-  }
-
-  const closing = documentText.indexOf("]]", end);
-  const nextOpening = documentText.indexOf("[[", end);
-  return closing !== -1 && (nextOpening === -1 || closing < nextOpening);
 }
 
 function normalizeHeading(value: string | null): string | null {

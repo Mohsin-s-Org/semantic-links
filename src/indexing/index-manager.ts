@@ -109,8 +109,7 @@ export class PersistentIndexManager {
         this.updateReadyStatus();
         return;
       }
-      const files = this.app.vault.getMarkdownFiles()
-        .sort((left, right) => left.path.localeCompare(right.path));
+      const files = this.sortedMarkdownFiles();
       const livePaths = new Set(files.map((file) => file.path));
       let changed = false;
       for (const path of [...this.documents.keys()]) {
@@ -141,13 +140,24 @@ export class PersistentIndexManager {
     if (this.disposed || !this.opened) {
       return;
     }
-    this.pendingPaths.delete(path);
-    void this.enqueue(async () => {
-      if (this.removeFromMemory(path)) {
-        await this.persistCurrentGeneration();
-      }
-      this.updateReadyStatus();
-    }, delayMs);
+    this.pendingPaths.add(path);
+    this.scheduleFlush(delayMs);
+  }
+
+  scheduleRename(file: TFile, oldPath: string, delayMs = 250): void {
+    if (this.disposed || !this.opened || !isMarkdownFile(file)) {
+      this.scheduleRemove(oldPath, delayMs);
+      return;
+    }
+
+    const document = this.documents.get(oldPath);
+    if (document !== undefined) {
+      this.documents.delete(oldPath);
+      this.documents.set(file.path, { ...document, path: file.path });
+    }
+    this.pendingPaths.delete(oldPath);
+    this.pendingPaths.add(file.path);
+    this.scheduleFlush(delayMs);
   }
 
   scheduleScopeRebuild(delayMs = 500): void {
@@ -172,7 +182,8 @@ export class PersistentIndexManager {
     this.cancelScopeTimer();
     this.scopeTimer = globalThis.setTimeout(() => {
       this.scopeTimer = null;
-      void this.enqueue(() => this.applyPendingSettingsChange());
+      void this.enqueue(() => this.applyPendingSettingsChange())
+        .catch(() => undefined);
     }, Math.max(0, delayMs));
   }
 
@@ -248,21 +259,36 @@ export class PersistentIndexManager {
     if (!this.opened || this.disposed) {
       return;
     }
-    this.clearMemory();
     if (!this.indexingEnabled) {
       this.updateReadyStatus();
       return;
     }
-    const files = this.app.vault.getMarkdownFiles()
+
+    const files = this.sortedMarkdownFiles();
+    const livePaths = new Set(files.map((file) => file.path));
+    for (const path of [...this.documents.keys()]) {
+      if (!livePaths.has(path)) {
+        this.removeFromMemory(path);
+      }
+    }
+    await this.processFiles(
+      files,
+      true,
+      "Rebuilding the semantic index",
+      true
+    );
+  }
+
+  private sortedMarkdownFiles(): TFile[] {
+    return this.app.vault.getMarkdownFiles()
       .sort((left, right) => left.path.localeCompare(right.path));
-    await this.processFiles(files, true, "Rebuilding the semantic index");
   }
 
   private scheduleFlush(delayMs: number): void {
     this.cancelScheduledFlush();
     this.flushTimer = globalThis.setTimeout(() => {
       this.flushTimer = null;
-      void this.flushPending();
+      void this.flushPending().catch(() => undefined);
     }, Math.max(0, delayMs));
   }
 
@@ -284,6 +310,7 @@ export class PersistentIndexManager {
           changed = this.removeFromMemory(path) || changed;
         }
       }
+      files.sort((left, right) => left.path.localeCompare(right.path));
       await this.processFiles(files, changed, "Updating changed notes");
     });
   }
@@ -291,7 +318,8 @@ export class PersistentIndexManager {
   private async processFiles(
     files: readonly TFile[],
     changedBeforeRead: boolean,
-    message: string
+    message: string,
+    replaceUnchanged = false
   ): Promise<void> {
     const signal = this.lifecycle.signal;
     const parsed: ParsedIndexDocument[] = [];
@@ -304,16 +332,28 @@ export class PersistentIndexManager {
     });
 
     for (const file of files) {
-      if (signal.aborted || this.disposed) {
+      if (signal.aborted || this.disposed || !this.indexingEnabled) {
         return;
       }
-      const result = await parseIndexDocument(this.app, file, this.getSettings());
+      const previous = this.documents.get(file.path);
+      const result = await parseIndexDocument(
+        this.app,
+        file,
+        this.getSettings(),
+        previous?.id
+      );
+      if (signal.aborted || this.disposed || !this.indexingEnabled) {
+        return;
+      }
+
       processed += 1;
       if (result === null) {
         changed = this.removeFromMemory(file.path) || changed;
       } else if (result !== undefined) {
-        const previous = this.documents.get(file.path);
-        if (canReuseDocument(previous, result.document.contentHash)) {
+        if (!replaceUnchanged && canReuseDocument(
+          previous,
+          result.document.contentHash
+        )) {
           this.documents.set(file.path, {
             ...previous,
             modifiedAt: result.document.modifiedAt
@@ -335,6 +375,9 @@ export class PersistentIndexManager {
       }
     }
 
+    if (signal.aborted || this.disposed || !this.indexingEnabled) {
+      return;
+    }
     await this.embedNewChunks(parsed, signal);
     if (changed) {
       await this.persistCurrentGeneration();
@@ -480,7 +523,11 @@ export class PersistentIndexManager {
       return;
     }
     if (!this.indexingEnabled) {
-      this.updateStatus("paused", message ?? "Semantic indexing is disabled. Lexical suggestions remain available.");
+      this.updateStatus("paused", message ?? "Semantic indexing is disabled. Lexical suggestions remain available.", {
+        queuedCount: 0,
+        processedCount: 0,
+        totalCount: 0
+      });
       return;
     }
     const vectorMessage = this.embeddingClient === null
@@ -489,6 +536,9 @@ export class PersistentIndexManager {
         : "Passages are stored; vectors await the consent-based local model runtime."
       : `${this.vectors.size} passage vectors are ready.`;
     this.updateStatus("ready", message ?? vectorMessage, {
+      queuedCount: 0,
+      processedCount: 0,
+      totalCount: 0,
       lastCompletedAt: this.lastCompletedAt
     });
   }
@@ -512,16 +562,18 @@ export class PersistentIndexManager {
     }
   }
 
-  private enqueue(task: () => Promise<void>, delayMs = 0): Promise<void> {
+  private enqueue(task: () => Promise<void>): Promise<void> {
     const run = async (): Promise<void> => {
-      if (delayMs > 0) {
-        await delay(delayMs);
-      }
       if (!this.disposed) {
         try {
           await task();
         } catch (error) {
-          this.updateStatus("error", error instanceof Error ? error.message : "Semantic index operation failed.");
+          this.updateStatus(
+            "error",
+            error instanceof Error
+              ? error.message
+              : "Semantic index operation failed."
+          );
           throw error;
         }
       }
@@ -566,12 +618,8 @@ function modelsEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, milliseconds);
-  });
-}
-
 function yieldToEventLoop(): Promise<void> {
-  return delay(0);
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
 }

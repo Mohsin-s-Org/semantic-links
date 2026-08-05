@@ -30,7 +30,9 @@ const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
   "maxSuggestions",
   "minimumConfidence",
   "excludedFolders",
+  "excludedFiles",
   "excludedTags",
+  "excludedProperties",
   "linkPathMode"
 ]);
 
@@ -85,10 +87,20 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
       "excludedFolders",
       DEFAULT_SETTINGS.excludedFolders
     ),
+    excludedFiles: readStringList(
+      input,
+      "excludedFiles",
+      DEFAULT_SETTINGS.excludedFiles
+    ),
     excludedTags: normalizeTags(readStringList(
       input,
       "excludedTags",
       DEFAULT_SETTINGS.excludedTags
+    )),
+    excludedProperties: normalizeProperties(readStringList(
+      input,
+      "excludedProperties",
+      DEFAULT_SETTINGS.excludedProperties
     )),
     linkPathMode: readEnum(
       input,
@@ -120,9 +132,20 @@ function readSemanticToggle(record: Record<string, unknown>): boolean {
 }
 
 function normalizeTags(tags: string[]): string[] {
-  return [...new Set(tags
-    .map((tag) => tag.replace(/^#/u, "").toLocaleLowerCase())
-    .filter((tag) => tag.length > 0))];
+  return uniqueNormalized(tags, (tag) => tag.replace(/^#/u, ""));
+}
+
+function normalizeProperties(properties: string[]): string[] {
+  return uniqueNormalized(properties, (property) => property);
+}
+
+function uniqueNormalized(
+  values: string[],
+  transform: (value: string) => string
+): string[] {
+  return [...new Set(values
+    .map((value) => transform(value).trim().toLocaleLowerCase())
+    .filter((value) => value.length > 0))];
 }
 
 function matchesCurrentSettings(
@@ -138,7 +161,9 @@ function matchesCurrentSettings(
     && record["maxSuggestions"] === settings.maxSuggestions
     && record["minimumConfidence"] === settings.minimumConfidence
     && arraysEqual(record["excludedFolders"], settings.excludedFolders)
+    && arraysEqual(record["excludedFiles"], settings.excludedFiles)
     && arraysEqual(record["excludedTags"], settings.excludedTags)
+    && arraysEqual(record["excludedProperties"], settings.excludedProperties)
     && record["linkPathMode"] === settings.linkPathMode;
 }
 

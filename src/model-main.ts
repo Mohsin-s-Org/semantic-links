@@ -1,4 +1,3 @@
-import type { EditorView } from "@codemirror/view";
 import { Notice } from "obsidian";
 import BaseSemanticLinksPlugin from "./main.ts";
 import {
@@ -6,10 +5,8 @@ import {
   REMOVE_MODEL_COMMAND_ID
 } from "./constants.ts";
 import type { SuggestionContext } from "./editor/context.ts";
-import { createSemanticQueryExtension } from "./editor/semantic-extension.ts";
 import { LocalModelManager } from "./embeddings/model-manager.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
-import { isFileExcluded } from "./scope/exclusions.ts";
 import { ModelRemovalModal } from "./ui/model-removal-modal.ts";
 import { ModelSetupModal } from "./ui/model-setup-modal.ts";
 
@@ -19,21 +16,6 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
 
   override async onload(): Promise<void> {
     await super.onload();
-    const host = this;
-
-    this.registerEditorExtension(createSemanticQueryExtension({
-      get debounceMs() {
-        return Math.max(100, host.settings.debounceMs);
-      },
-      get maxSuggestions() {
-        return host.settings.maxSuggestions;
-      },
-      canSearch: (view) => this.canSearchSemantically(view),
-      sourcePath: () => this.app.workspace.getActiveFile()?.path ?? null,
-      search: (context, sourcePath, signal) => {
-        return this.searchSemantically(context, sourcePath, signal);
-      }
-    }));
 
     this.addCommand({
       id: DOWNLOAD_MODEL_COMMAND_ID,
@@ -59,24 +41,22 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     super.onunload();
   }
 
-  private canSearchSemantically(view: EditorView): boolean {
-    const file = this.app.workspace.getActiveFile();
-    return view.hasFocus
-      && this.settings.semanticModelEnabled
-      && this.modelManager.client !== null
-      && this.indexManager !== null
-      && file !== null
-      && !isFileExcluded(this.app.metadataCache, file, this.settings);
-  }
-
-  private async searchSemantically(
+  protected override async searchSemanticMatches(
     context: SuggestionContext,
     sourcePath: string,
     signal: AbortSignal
   ): Promise<SemanticMatch[]> {
+    if (!this.settings.semanticModelEnabled) {
+      return [];
+    }
     const file = this.app.workspace.getActiveFile();
     const manager = this.indexManager;
-    if (file === null || manager === null || file.path !== sourcePath) {
+    if (
+      file === null
+      || manager === null
+      || file.path !== sourcePath
+      || this.modelManager.client === null
+    ) {
       return [];
     }
     const query = [

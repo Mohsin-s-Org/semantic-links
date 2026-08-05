@@ -17,6 +17,5 @@ export interface SemanticLinksSettings {
 
 export interface SettingsLoadResult {
   settings: SemanticLinksSettings;
-  migrated: boolean;
-  warnings: string[];
+  needsSave: boolean;
 }

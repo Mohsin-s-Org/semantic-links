@@ -28,6 +28,7 @@ const requiredFiles = [
   "src/indexing/embedding-batcher.ts",
   "src/indexing/index-manager.ts",
   "src/indexing/note-parser.ts",
+  "src/indexing/scope-fingerprint.ts",
   "src/indexing/types.ts",
   "src/storage/index-store.ts",
   "src/views/index-status-view.ts",
@@ -52,6 +53,7 @@ const [
   tsconfig,
   constantsSource,
   mainSource,
+  managerSource,
   parserSource,
   storeSource,
   buildSource,
@@ -63,6 +65,7 @@ const [
   readJson("tsconfig.json"),
   readFile("src/constants.ts", "utf8"),
   readFile("src/main.ts", "utf8"),
+  readFile("src/indexing/index-manager.ts", "utf8"),
   readFile("src/indexing/note-parser.ts", "utf8"),
   readFile("src/storage/index-store.ts", "utf8"),
   readFile("esbuild.config.mjs", "utf8"),
@@ -84,7 +87,10 @@ assert(constantsSource.includes('DELETE_INDEX_COMMAND_ID = "delete-index"'), "De
 assert(mainSource.includes("new LexicalVaultIndex"), "The local lexical index must remain available.");
 assert(mainSource.includes("new PersistentIndexManager"), "Phase 3 must initialize the persistent index after layout readiness.");
 assert(mainSource.includes("createSuggestionPopupExtension"), "The inline confirmation popup must remain registered.");
+assert(managerSource.includes("findRemovedChunkIds"), "Modified notes must retain unchanged passage vectors.");
+assert(managerSource.includes("createIndexScopeFingerprint"), "Stored indexes must be bound to their exclusion scope.");
 assert(parserSource.indexOf("isFileExcluded") < parserSource.indexOf("cachedRead"), "Excluded notes must be rejected before content is read.");
+assert(storeSource.includes("scopeFingerprint"), "The persistent manifest must record its exclusion scope.");
 assert(storeSource.includes("manifest.json.next"), "Persistent writes must stage a next manifest.");
 assert(storeSource.includes("manifest.json.previous"), "Persistent writes must retain a recoverable previous manifest.");
 assert(!buildSource.includes("--minify"), "The release bundle must remain readable for review.");

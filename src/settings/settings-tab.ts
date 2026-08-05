@@ -19,6 +19,7 @@ type SettingsHost = Plugin & {
   saveSettings(): Promise<void>;
   openModelSetup?(): void;
   requestModelRemoval?(): void;
+  setModelEnabled?(enabled: boolean): Promise<void>;
 };
 
 type SettingKey = keyof SemanticLinksSettings & string;
@@ -157,15 +158,16 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       render: (setting) => {
         const installed = this.owner.settings.semanticModelInstalled;
         setting.setDesc(installed
-          ? "The verified multilingual model is stored locally. Disable it to keep the files without running semantic queries."
+          ? "The verified multilingual model is stored locally. Disable it to unload inference memory while retaining the cache and vectors."
           : "Download the verified multilingual model after reviewing its size and local-only privacy details.");
         if (installed) {
           setting.addToggle((toggle) => {
             toggle
               .setValue(this.owner.settings.semanticModelEnabled)
               .onChange((value) => {
-                this.owner.settings.semanticModelEnabled = value;
-                void this.owner.saveSettings();
+                void this.owner.setModelEnabled?.(value).catch(() => {
+                  toggle.setValue(this.owner.settings.semanticModelEnabled);
+                });
               });
           });
           setting.addButton((button) => {

@@ -12,6 +12,8 @@ declare module "obsidian" {
     onHistoryBack(): void;
   }
 
+  // The generic parameter must match the official class for declaration merging.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface PopoverSuggest<T> {
     onHistoryBack(): void;
   }

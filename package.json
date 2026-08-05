@@ -13,12 +13,13 @@
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "node --experimental-strip-types --test tests/unit/*.test.ts",
     "test:integration": "node --experimental-strip-types --test tests/integration/*.test.ts",
+    "verify:reproducible-build": "node scripts/verify-reproducible-build.mjs",
     "stage:release": "node scripts/stage-release.mjs",
     "validate:versions": "node scripts/validate-versions.mjs",
     "validate:repository": "node scripts/validate-repository.mjs",
     "validate:release-assets": "node scripts/validate-release-assets.mjs dist/release",
     "smoke:clean-vault": "node scripts/smoke-clean-vault.mjs",
-    "ci": "npm run typecheck && npm run lint && npm test && npm run build && node --check main.js && npm run validate:versions && npm run validate:repository && npm run stage:release && npm run validate:release-assets && npm run smoke:clean-vault"
+    "ci": "npm run typecheck && npm run lint && npm test && npm run build && npm run verify:reproducible-build && node --check main.js && npm run validate:versions && npm run validate:repository && npm run stage:release && npm run validate:release-assets && npm run smoke:clean-vault"
   },
   "devDependencies": {
     "@codemirror/state": "6.5.0",

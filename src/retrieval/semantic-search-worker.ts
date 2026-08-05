@@ -47,12 +47,14 @@ export class SemanticSearchWorker {
     if (this.worker === null) {
       return;
     }
+    const vectorBuffer = transferableBuffer(vectors);
+    const documentBuffer = transferableBuffer(documents);
     this.worker.postMessage({
       type: "update",
-      vectors: vectors.buffer,
-      documents: documents.buffer,
+      vectors: vectorBuffer,
+      documents: documentBuffer,
       dimensions
-    }, [vectors.buffer, documents.buffer]);
+    }, [vectorBuffer, documentBuffer]);
   }
 
   search(
@@ -69,6 +71,7 @@ export class SemanticSearchWorker {
     }
     const id = ++this.requestId;
     const copy = new Float32Array(query);
+    const queryBuffer = transferableBuffer(copy);
     return new Promise<WorkerSearchResult[]>((resolve, reject) => {
       const abort = (): void => {
         this.pending.delete(id);
@@ -83,10 +86,10 @@ export class SemanticSearchWorker {
       this.worker?.postMessage({
         type: "search",
         id,
-        query: copy.buffer,
+        query: queryBuffer,
         excludedDocument,
         limit
-      }, [copy.buffer]);
+      }, [queryBuffer]);
     });
   }
 
@@ -132,6 +135,14 @@ export class SemanticSearchWorker {
     }
     this.pending.clear();
   }
+}
+
+function transferableBuffer(view: Float32Array | Int32Array): ArrayBuffer {
+  const buffer = view.buffer;
+  if (!(buffer instanceof ArrayBuffer)) {
+    throw new Error("Shared buffers cannot be transferred to the semantic search worker.");
+  }
+  return buffer;
 }
 
 function abortError(signal: AbortSignal): Error {

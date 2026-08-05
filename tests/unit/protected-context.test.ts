@@ -11,8 +11,11 @@ const protectedExamples = [
   "Read [[Water cycle|water]] today",
   "Read [water](Water.md) today",
   "The value is $water$ today",
+  "$$\nwater\n$$",
   "<div>water</div>",
-  "<!-- water -->"
+  "<div>\nwater\n</div>",
+  "<!-- water -->",
+  "<!--\nwater\n-->"
 ];
 
 test("protected Markdown ranges do not produce anchors", () => {
@@ -30,4 +33,11 @@ test("normal prose remains eligible", () => {
 
   assert.equal(isProtectedAnchor(documentText, start, start + 5), false);
   assert.equal(findTextAnchor(documentText, start + 2)?.text, "water");
+});
+
+test("escaped math delimiters do not protect prose", () => {
+  const documentText = "The price is \\$5 and water is normal.";
+  const start = documentText.indexOf("water");
+
+  assert.equal(isProtectedAnchor(documentText, start, start + 5), false);
 });

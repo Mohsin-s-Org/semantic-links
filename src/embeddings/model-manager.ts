@@ -1,7 +1,7 @@
 import { LocalEmbeddingClient, type ModelProgressListener } from "./local-embedding-client.ts";
 import { LOCAL_MODEL_CACHE_KEY } from "./model-config.ts";
 
-export type ModelState = "not-installed" | "loading" | "ready" | "error";
+export type ModelState = "not-installed" | "disabled" | "loading" | "ready" | "error";
 
 export interface ModelStatus {
   state: ModelState;
@@ -64,6 +64,17 @@ export class LocalModelManager {
       this.queryCache.delete(oldest);
     }
     return new Float32Array(vector);
+  }
+
+  unload(): void {
+    this.clientValue?.dispose();
+    this.clientValue = null;
+    this.queryCache.clear();
+    this.update({
+      state: "disabled",
+      message: "The local semantic model is installed but unloaded.",
+      percent: null
+    });
   }
 
   async remove(): Promise<void> {

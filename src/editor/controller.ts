@@ -47,7 +47,6 @@ export class EditorSuggestionController {
   private suppressedUntil = 0;
   private composing = false;
   private applyingPluginTransaction = false;
-  private visibleContextHash: string | null = null;
   private disposed = false;
 
   constructor(scheduler: ControllerScheduler = browserScheduler) {
@@ -102,22 +101,13 @@ export class EditorSuggestionController {
     ticket: SuggestionRequestTicket,
     currentKey: SuggestionRequestKey
   ): boolean {
-    const accepted = !this.disposed
+    return !this.disposed
       && !ticket.signal.aborted
       && ticket.requestId === this.latestRequestId
       && ticket.serializedKey === this.latestKey
       && ticket.serializedKey === serializeRequestKey(currentKey)
       && this.pendingKeys.has(ticket.serializedKey)
       && !this.shouldSuppress();
-
-    if (accepted) {
-      this.visibleContextHash = ticket.key.contextHash;
-    }
-    return accepted;
-  }
-
-  hideVisibleSuggestions(): void {
-    this.visibleContextHash = null;
   }
 
   setComposing(composing: boolean): void {
@@ -158,14 +148,12 @@ export class EditorSuggestionController {
       this.scheduler.now() + Math.max(0, durationMs)
     );
     this.cancelScheduledRequest();
-    this.visibleContextHash = null;
   }
 
   invalidate(): void {
     this.latestRequestId += 1;
     this.latestKey = null;
     this.lastCompletedKey = null;
-    this.visibleContextHash = null;
     this.cancelScheduledRequest();
     this.cancelInFlightRequests();
   }

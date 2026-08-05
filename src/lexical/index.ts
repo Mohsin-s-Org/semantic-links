@@ -28,10 +28,11 @@ interface IndexedDocument {
   aliasTokens: ReadonlySet<string>;
   headings: readonly IndexedHeading[];
   normalizedTags: ReadonlySet<string>;
+  tagTokens: ReadonlySet<string>;
   bodyTokens: ReadonlyMap<string, number>;
   allTerms: ReadonlySet<string>;
   labelGrams: ReadonlySet<string>;
-  exactLabels: ReadonlySet<string>;
+  exactPrimaryLabels: ReadonlySet<string>;
   preview: string | null;
 }
 
@@ -52,7 +53,7 @@ export class LexicalIndex {
   private readonly documents = new Map<string, IndexedDocument>();
   private readonly postings = new Map<string, Set<string>>();
   private readonly labelPostings = new Map<string, Set<string>>();
-  private readonly exactLabelPostings = new Map<string, Set<string>>();
+  private readonly primaryLabelPostings = new Map<string, Set<string>>();
 
   get size(): number {
     return this.documents.size;
@@ -62,25 +63,25 @@ export class LexicalIndex {
     this.documents.clear();
     this.postings.clear();
     this.labelPostings.clear();
-    this.exactLabelPostings.clear();
+    this.primaryLabelPostings.clear();
   }
 
-  hasExactLabel(value: string): boolean {
+  hasExactTitleOrAlias(value: string): boolean {
     const normalized = normalizeLexicalText(value);
-    return normalized.length > 0 && this.exactLabelPostings.has(normalized);
+    return normalized.length > 0 && this.primaryLabelPostings.has(normalized);
   }
 
   upsert(input: LexicalDocumentInput): void {
     this.remove(input.path);
     const document = createIndexedDocument(input);
     this.documents.set(document.path, document);
-    for (const term of document.allTerms) {
-      const paths = this.postings.get(term) ?? new Set<string>();
-      paths.add(document.path);
-      this.postings.set(term, paths);
-    }
+    addToPostings(this.postings, document.allTerms, document.path);
     addToPostings(this.labelPostings, document.labelGrams, document.path);
-    addToPostings(this.exactLabelPostings, document.exactLabels, document.path);
+    addToPostings(
+      this.primaryLabelPostings,
+      document.exactPrimaryLabels,
+      document.path
+    );
   }
 
   remove(path: string): void {
@@ -88,16 +89,15 @@ export class LexicalIndex {
     if (previous === undefined) {
       return;
     }
+
     this.documents.delete(path);
-    for (const term of previous.allTerms) {
-      const paths = this.postings.get(term);
-      paths?.delete(path);
-      if (paths?.size === 0) {
-        this.postings.delete(term);
-      }
-    }
-    removeFromPostings(this.labelPostings, previous.labelGrams, previous.path);
-    removeFromPostings(this.exactLabelPostings, previous.exactLabels, previous.path);
+    removeFromPostings(this.postings, previous.allTerms, path);
+    removeFromPostings(this.labelPostings, previous.labelGrams, path);
+    removeFromPostings(
+      this.primaryLabelPostings,
+      previous.exactPrimaryLabels,
+      path
+    );
   }
 
   search(query: LexicalSearchQuery): LexicalSuggestion[] {
@@ -120,7 +120,13 @@ export class LexicalIndex {
       if (document === undefined) {
         continue;
       }
-      const candidate = scoreDocument(document, anchor, anchorTokens, contextTokens, this.postings);
+      const candidate = scoreDocument(
+        document,
+        anchor,
+        anchorTokens,
+        contextTokens,
+        this.postings
+      );
       if (candidate !== null && candidate.suggestion.score >= query.minimumScore) {
         scored.push(candidate);
       }
@@ -142,7 +148,7 @@ export class LexicalIndex {
     anchorTokens: ReadonlySet<string>,
     contextTokens: readonly string[]
   ): Set<string> {
-    const candidates = new Set<string>(this.exactLabelPostings.get(anchor) ?? []);
+    const candidates = new Set<string>(this.primaryLabelPostings.get(anchor) ?? []);
     for (const token of [...anchorTokens, ...contextTokens]) {
       for (const path of this.postings.get(token) ?? []) {
         candidates.add(path);
@@ -164,7 +170,6 @@ export class LexicalIndex {
     }
     return candidates;
   }
-
 }
 
 function createIndexedDocument(input: LexicalDocumentInput): IndexedDocument {
@@ -177,21 +182,28 @@ function createIndexedDocument(input: LexicalDocumentInput): IndexedDocument {
       tokens: new Set(tokenizeLexicalText(heading.text))
     }))
     .filter((heading) => heading.normalized.length > 0);
-  const normalizedTags = new Set(uniqueNormalized(input.tags.map((tag) => tag.replace(/^#/u, ""))));
+  const normalizedTags = new Set(uniqueNormalized(
+    input.tags.map((tag) => tag.replace(/^#/u, ""))
+  ));
+  const tagTokens = new Set(
+    [...normalizedTags].flatMap((tag) => tokenizeLexicalText(tag))
+  );
   const bodyTokens = countTerms(tokenizeLexicalText(input.body).slice(0, 5_000));
-  const exactLabels = new Set<string>([
+  const exactPrimaryLabels = new Set<string>([
     normalizedTitle,
-    ...normalizedAliases,
-    ...headings.map((heading) => heading.normalized)
+    ...normalizedAliases
   ]);
   const labelGrams = new Set<string>(
-    [...exactLabels].flatMap((label) => createLexicalNgrams(label))
+    [
+      ...exactPrimaryLabels,
+      ...headings.map((heading) => heading.normalized)
+    ].flatMap((label) => createLexicalNgrams(label))
   );
   const allTerms = new Set<string>([
     ...tokenizeLexicalText(input.title),
     ...input.aliases.flatMap((alias) => tokenizeLexicalText(alias)),
     ...headings.flatMap((heading) => [...heading.tokens]),
-    ...normalizedTags,
+    ...tagTokens,
     ...bodyTokens.keys()
   ]);
 
@@ -204,10 +216,11 @@ function createIndexedDocument(input: LexicalDocumentInput): IndexedDocument {
     aliasTokens: new Set(input.aliases.flatMap((alias) => tokenizeLexicalText(alias))),
     headings,
     normalizedTags,
+    tagTokens,
     bodyTokens,
     allTerms,
     labelGrams,
-    exactLabels,
+    exactPrimaryLabels,
     preview: compactPreview(input.body)
   };
 }
@@ -286,6 +299,11 @@ function scoreDocument(
   if (aliasCoverage > 0) {
     score = Math.max(score, 0.57 + aliasCoverage * 0.24);
     kinds.add("alias");
+  }
+  const tagCoverage = tokenCoverage(anchorTokens, document.tagTokens);
+  if (tagCoverage > 0) {
+    score = Math.max(score, 0.56 + tagCoverage * 0.24);
+    kinds.add("tag");
   }
 
   const bodyScore = scoreBody(document, anchorTokens, contextTokens, postings);

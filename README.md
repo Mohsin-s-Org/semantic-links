@@ -2,33 +2,32 @@
 
 A privacy-first Obsidian plugin that suggests meaningful internal links while you write. Links are inserted only after explicit confirmation.
 
-Phase 1 implements the production foundation only. Semantic models, vault indexing, and ranking are deliberately excluded.
+Phase 2 adds a fully local lexical suggestion engine. It does not download a model, send vault content over the network, or alter a note without confirmation.
 
-## Phase 1 capabilities
+## Phase 2 capabilities
 
-- Strict TypeScript with the official Obsidian 1.13 API types
-- Versioned settings validated from `unknown`
-- Searchable declarative settings with one source of truth
-- One cancellable request controller per CodeMirror editor
-- Request deduplication and immediate stale-work cancellation
-- Document, cursor, focus, IME, plugin-transaction, and Undo/redo handling
-- Explicit mock note chooser for exercising the acceptance path
+- In-memory scan of Markdown notes after the Obsidian layout is ready
+- Indexing of frontmatter titles, aliases, headings, tags and cleaned note text
+- Unicode-aware normalization, including Arabic diacritics, plus exact, prefix, token and fuzzy matching
+- Paragraph- and sentence-aware context extraction from the active word or selected phrase
+- Existing Markdown safety guards for frontmatter, links, code, URLs, HTML, comments and math
+- Cursor-anchored suggestion popup with click confirmation
+- `Alt+L` manual keyboard mode with arrow, Enter and Escape controls
+- Incremental refresh after note creation, modification, rename, deletion or metadata changes
 - Revalidated wikilink insertion in one CodeMirror transaction
-- Protection against stale-file acceptance and nested wikilinks
-- Unit, integration, policy, build, reproducibility, and packaging checks
-- Exact three-file releases with separate provenance attestations
+- Protection against stale files, stale editor results, nested wikilinks and excluded notes
 
-The mock chooser is not the final lexical or semantic suggestion engine.
+Semantic embeddings and model runtime work remain deliberately excluded.
 
 ## Example
 
-Explicitly accepting `Plant transpiration` can change:
+Typing in this sentence:
 
 ```markdown
 Plants lose water through their leaves during transpiration.
 ```
 
-to one undoable edit:
+can suggest `Plant transpiration`. Explicitly accepting it produces one undoable edit:
 
 ```markdown
 Plants lose [[Plant transpiration|water]] through their leaves during transpiration.
@@ -62,7 +61,7 @@ manifest.json
 styles.css
 ```
 
-No ZIP, model, WASM, checksum, or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
+No ZIP, model, WASM, checksum or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
 
 ## Planning documents
 
@@ -70,14 +69,16 @@ No ZIP, model, WASM, checksum, or documentation assets are attached. Release tag
 - [Master plan addendum](docs/master-plan-addendum.md)
 - [Obsidian implementation guardrails](docs/obsidian-implementation-guardrails.md)
 - [Phase 1 foundation checklist](docs/phase-1-foundation-checklist.md)
+- [Phase 2 lexical checklist](docs/phase-2-lexical-checklist.md)
 - [Community Plugins release checklist](docs/community-plugin-release-checklist.md)
+- [GitHub Actions usage policy](GITHUB_ACTIONS_POLICY.md)
 
 The addendum and guardrails are authoritative where they conflict with older implementation details in the original master plan.
 
-## Privacy target
+## Privacy
 
-Vault content, filenames, links, tags, embeddings, and index records remain on the device in the default implementation. Future model or runtime downloads require explicit approval.
+Vault content, filenames, links, tags and index records remain on the device. The Phase 2 index is held in memory and is discarded when the plugin unloads. Future model or runtime downloads require explicit approval.
 
 ## Status
 
-Phase 1 foundation implemented. A manual Obsidian desktop walkthrough remains required before release. The next milestone is the local runtime feasibility spike, followed by the lexical vault index and real suggestions.
+Phase 2 lexical suggestions are implemented. A manual Obsidian desktop walkthrough remains required before release. The next milestone is the local runtime feasibility spike for a later semantic phase.

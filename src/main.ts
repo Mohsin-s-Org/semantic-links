@@ -116,7 +116,7 @@ export default class SemanticLinksPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-    this.lexicalIndex?.scheduleRebuild();
+    this.lexicalIndex?.scheduleScopeRebuild();
   }
 
   private async initializeLexicalIndex(): Promise<void> {
@@ -125,13 +125,13 @@ export default class SemanticLinksPlugin extends Plugin {
       return;
     }
 
+    this.registerLexicalIndexEvents(lexicalIndex);
     this.setStatus("indexing vault");
     await lexicalIndex.rebuild(this.lifecycle.signal);
     if (this.lifecycle.signal.aborted || !lexicalIndex.ready) {
       return;
     }
 
-    this.registerLexicalIndexEvents(lexicalIndex);
     this.setStatus(`ready · ${lexicalIndex.size} notes`);
   }
 
@@ -289,10 +289,6 @@ export default class SemanticLinksPlugin extends Plugin {
       context,
       ticket.key.mode
     );
-    if (!controller.acceptResult(ticket, currentKey)) {
-      return;
-    }
-
     const suggestions = lexicalIndex.search({
       anchorText: context.anchor.text,
       contextText: context.searchText,
@@ -300,7 +296,7 @@ export default class SemanticLinksPlugin extends Plugin {
       limit: this.settings.maxSuggestions,
       minimumScore: this.settings.minimumConfidence
     });
-    if (ticket.signal.aborted || !isSameRequest(ticket.key, currentKey)) {
+    if (!controller.acceptResult(ticket, currentKey)) {
       return;
     }
     if (suggestions.length === 0) {
@@ -444,17 +440,4 @@ function yieldBeforeSearch(): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, 0);
   });
-}
-
-function isSameRequest(
-  left: SuggestionRequestKey,
-  right: SuggestionRequestKey
-): boolean {
-  return left.filePath === right.filePath
-    && left.documentVersion === right.documentVersion
-    && left.anchorStart === right.anchorStart
-    && left.anchorEnd === right.anchorEnd
-    && left.anchorText === right.anchorText
-    && left.contextHash === right.contextHash
-    && left.mode === right.mode;
 }

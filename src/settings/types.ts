@@ -7,6 +7,8 @@ export interface SemanticLinksSettings {
   automaticSuggestions: boolean;
   lexicalMatchingEnabled: boolean;
   semanticIndexingEnabled: boolean;
+  semanticModelEnabled: boolean;
+  semanticModelInstalled: boolean;
   debounceMs: number;
   maxSuggestions: number;
   minimumConfidence: number;

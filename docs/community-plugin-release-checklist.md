@@ -1,109 +1,105 @@
 # Community Plugins release checklist
 
-Use this checklist for every public Semantic Links release. The official release tag must exactly match the version in `manifest.json` and must not use a `v` prefix.
+Use this checklist for every public Semantic Links release. The official release tag must exactly match `manifest.json` without a `v` prefix.
 
 ## Repository
 
 - [ ] Public repository with a clear README and MIT licence
 - [ ] Stable plugin ID: `semantic-links`
-- [ ] Display name uses only permitted punctuation
 - [ ] `package-lock.json` committed
 - [ ] Official `obsidian` package used for API types
-- [ ] No handwritten type stub that turns Obsidian APIs into `any`
-- [ ] Generated `main.js` not committed to the normal source tree
+- [ ] No handwritten type stub that replaces Obsidian APIs
+- [ ] Generated `main.js` not committed
 - [ ] No model binaries, indexes, downloaded assets, or vault content committed
 
 ## Manifest and versions
 
 - [ ] `manifest.json` version matches `package.json`
-- [ ] `versions.json` contains the release version and correct minimum Obsidian version
-- [ ] `isDesktopOnly` remains `true` until mobile support is actually tested
-- [ ] Description accurately states that the plugin suggests links and does not insert them automatically
-- [ ] Command IDs do not repeat the plugin ID
+- [ ] `versions.json` maps the release to the correct minimum Obsidian version
+- [ ] `isDesktopOnly` remains `true` until mobile support is tested
+- [ ] Description states that links require explicit confirmation
+- [ ] Command IDs are short local identifiers
 
 ## Source review
 
-- [ ] Strict TypeScript passes
-- [ ] ESLint passes without unsafe-call, unsafe-member-access, unsafe-assignment, unsafe-return, unsafe-argument, or unexpected-any warnings in plugin source
-- [ ] Settings headings use `Setting.setHeading()`
-- [ ] `PluginSettingTab.getSettingDefinitions()` is implemented for settings search
-- [ ] Data loaded from disk, workers, and network is validated from `unknown`
-- [ ] No suspicious network patterns
-- [ ] No obfuscation
-- [ ] No note contents logged in production
+- [ ] Strict TypeScript and full library checking pass
+- [ ] Unsafe TypeScript lint rules pass for plugin source
+- [ ] Searchable declarative settings use `getSettingDefinitions()` and `Setting.setHeading()`
+- [ ] Disk, worker, and network data is validated from `unknown`
+- [ ] No obfuscation, minification, suspicious network behavior, or note-content logging
 - [ ] `onload()` performs no vault scan, model initialisation, or embedding work
+- [ ] Upstream type compatibility declarations are narrow, documented, and still necessary
 
 ## Editor safety
 
 - [ ] Suggestions never alter text without explicit confirmation
+- [ ] Acceptance revalidates the active file, target, range, text, and protected context
 - [ ] Link insertion is one editor transaction
-- [ ] One Undo restores the original text
-- [ ] Undo does not immediately recreate the link or reopen an accepted suggestion
+- [ ] One Undo restores the original text without reopening or reinserting
 - [ ] Redo does not duplicate feedback
-- [ ] Stale async results cannot alter the current note
-- [ ] Duplicate editor/key events cannot start the same query twice
-- [ ] IME composition is respected
-- [ ] Existing wikilinks, URLs, code, YAML, HTML, and math are guarded
-- [ ] Normal Enter, Tab, and arrow behaviour is unchanged when the popup is not focused
+- [ ] New context or focus loss cancels stale work immediately
+- [ ] Duplicate request keys cannot start twice
+- [ ] Document, cursor, IME, plugin-transaction, and Undo/redo changes are handled
+- [ ] Existing links, URLs, code, YAML, HTML, and math are protected
+- [ ] Normal editor keys remain unchanged when the chooser is not active
 
 ## Privacy and model handling
 
-- [ ] Semantic model download requires explicit user consent
+Before semantic functionality is released:
+
+- [ ] Model download requires explicit consent
 - [ ] Lexical suggestions work without the model
 - [ ] Model source and revision are pinned
 - [ ] Integrity and partial-download recovery are implemented
-- [ ] Vault text and embeddings never leave the device in the default provider
-- [ ] Exclusions are applied before text enters the embedding queue
-- [ ] Remove-model and delete-index commands actually delete managed files
+- [ ] Vault text and embeddings never leave the device by default
+- [ ] Exclusions are applied before embedding work
+- [ ] Remove-model and delete-index actions delete managed files
 
 ## CI
 
 - [ ] `npm ci`
-- [ ] type check
-- [ ] ESLint
-- [ ] unit tests
-- [ ] integration tests
-- [ ] production build
+- [ ] typecheck and lint
+- [ ] unit and integration tests
+- [ ] readable production build
+- [ ] byte-for-byte reproducible build comparison
 - [ ] `node --check main.js`
-- [ ] version agreement check
-- [ ] release asset allowlist check
-- [ ] reproducible build comparison
-- [ ] clean-vault installation test
+- [ ] version and repository policy checks
+- [ ] exact release-asset allowlist
+- [ ] clean-vault packaging smoke check
+- [ ] every third-party action is pinned to a full commit SHA
 
 ## Official GitHub release
 
-The official release contains exactly:
+The release contains exactly:
 
 - [ ] `main.js`
 - [ ] `manifest.json`
 - [ ] `styles.css`
 
-It must not contain:
+It does not contain:
 
 - [ ] manual installation ZIP
-- [ ] model files
-- [ ] WASM files
+- [ ] model or WASM files
 - [ ] checksum files
-- [ ] extra documentation assets
-- [ ] custom source archives
+- [ ] documentation bundles
+- [ ] other custom assets
 
-GitHub's automatically generated `Source code (zip)` and `Source code (tar.gz)` entries are expected and are not plugin assets.
+GitHub's automatically generated source archives are expected and are not plugin assets.
 
 ## Provenance
 
 - [ ] Workflow permissions include `contents: write`, `id-token: write`, and `attestations: write`
-- [ ] Separate build-provenance attestation created for `main.js`
-- [ ] Separate build-provenance attestation created for `manifest.json`
-- [ ] Separate build-provenance attestation created for `styles.css`
+- [ ] Current `actions/attest` action is pinned to a full commit SHA
+- [ ] Separate provenance attestation exists for each of the three release assets
 
 ## Manual verification
 
-- [ ] Install only the three release assets into a clean test vault
-- [ ] Enable plugin without developer files present
-- [ ] Test first launch with no model downloaded
-- [ ] Test model download cancellation and failure
-- [ ] Test indexing pause, resume, rebuild, and deletion
-- [ ] Test suggestion insertion and Undo
+- [ ] Install only the three assets into a clean test vault
+- [ ] Enable, disable, and reload the plugin without developer files
+- [ ] Confirm searchable settings and persistence
+- [ ] Test the command, protected contexts, insertion, Undo, and redo
 - [ ] Test light and dark themes
 - [ ] Test Windows, macOS, and Linux
 - [ ] Confirm release `main.js` matches a clean source build byte-for-byte
+
+The automated packaging smoke check does not replace this desktop walkthrough.

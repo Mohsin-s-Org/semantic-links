@@ -31,7 +31,7 @@ test("legacy settings migrate and invalid values are repaired", () => {
     excludedFolders: ["Archive", "Archive", 42, ""],
     excludedFiles: ["Private/Journal.md", "Private/Journal.md"],
     excludedTags: ["#private", "private"],
-    excludedProperties: ["No-Index", "no-index"]
+    excludedProperties: ["No-Index", "no-index", "Publish=FALSE"]
   });
 
   assert.equal(result.needsSave, true);
@@ -42,7 +42,10 @@ test("legacy settings migrate and invalid values are repaired", () => {
   assert.deepEqual(result.settings.excludedFolders, ["Archive"]);
   assert.deepEqual(result.settings.excludedFiles, ["Private/Journal.md"]);
   assert.deepEqual(result.settings.excludedTags, ["private"]);
-  assert.deepEqual(result.settings.excludedProperties, ["no-index"]);
+  assert.deepEqual(
+    result.settings.excludedProperties,
+    ["no-index", "publish=false"]
+  );
 });
 
 test("invalid values in the current schema are persisted after repair", () => {

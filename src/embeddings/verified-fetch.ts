@@ -36,7 +36,7 @@ export function createVerifiedFetch(
     const url = requestUrl(input);
     const expectation = expectationFor(url);
     const response = await fetcher(input, init);
-    if (!response.ok || expectation === null) {
+    if (!response.ok || expectation === null || requestMethod(input, init) === "HEAD") {
       return response;
     }
     return expectation.json
@@ -87,7 +87,7 @@ async function verifySmallJson(
   } catch {
     throw new Error(`Downloaded model metadata is not valid JSON: ${url.pathname}`);
   }
-  return copyResponse(response, bytes);
+  return copyResponse(response, bytes, bytes.byteLength);
 }
 
 function verifyStream(
@@ -98,10 +98,6 @@ function verifyStream(
   const body = response.body;
   if (body === null) {
     throw new Error(`Downloaded asset has no response body: ${url.pathname}`);
-  }
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > 0) {
-    verifySize(declared, expectation.size, url);
   }
   const hash = createHash("sha256");
   let received = 0;
@@ -125,7 +121,7 @@ function verifyStream(
       }
     }
   }));
-  return copyResponse(response, verified);
+  return copyResponse(response, verified, expectation.size);
 }
 
 function verifySize(actual: number, expected: number | undefined, url: URL): void {
@@ -136,11 +132,22 @@ function verifySize(actual: number, expected: number | undefined, url: URL): voi
   }
 }
 
-function copyResponse(response: Response, body: BodyInit): Response {
+function copyResponse(
+  response: Response,
+  body: BodyInit,
+  contentLength?: number
+): Response {
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  if (contentLength !== undefined) {
+    headers.set("content-length", String(contentLength));
+  } else {
+    headers.delete("content-length");
+  }
   return new Response(body, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers
+    headers
   });
 }
 
@@ -152,6 +159,13 @@ function requestUrl(input: RequestInfo | URL): URL {
     return new URL(input);
   }
   return new URL(input.url);
+}
+
+function requestMethod(input: RequestInfo | URL, init?: RequestInit): string {
+  if (typeof init?.method === "string") {
+    return init.method.toUpperCase();
+  }
+  return input instanceof Request ? input.method.toUpperCase() : "GET";
 }
 
 function isSafari(): boolean {

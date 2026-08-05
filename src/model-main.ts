@@ -89,7 +89,10 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
         this.settings.semanticModelEnabled = false;
         await this.saveSettings();
       },
-      () => unsubscribe()
+      () => {
+        unsubscribe();
+        this.modelManager.cancelLoading();
+      }
     );
     unsubscribe = this.modelManager.subscribe((status) => modal.updateStatus(status));
     modal.open();

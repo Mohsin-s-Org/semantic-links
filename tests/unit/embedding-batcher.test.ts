@@ -18,16 +18,16 @@ class RecordingClient implements EmbeddingClient {
   };
   readonly batches: string[][] = [];
 
-  async embed(
+  embed(
     inputs: readonly EmbeddingInput[],
     signal: AbortSignal
   ): Promise<EmbeddingOutput[]> {
     assert.equal(signal.aborted, false);
     this.batches.push(inputs.map((input) => input.id));
-    return inputs.map((input, index) => ({
+    return Promise.resolve(inputs.map((input, index) => ({
       id: input.id,
       vector: new Float32Array([index + 1, input.text.length, 1])
-    }));
+    })));
   }
 
   dispose(): void {}
@@ -56,10 +56,10 @@ test("embeds inputs in bounded batches and preserves ids", async () => {
 
 test("rejects malformed vectors before they enter storage", async () => {
   const client = new RecordingClient();
-  client.embed = async (inputs) => inputs.map((input) => ({
+  client.embed = (inputs) => Promise.resolve(inputs.map((input) => ({
     id: input.id,
     vector: new Float32Array([1, 2])
-  }));
+  })));
 
   await assert.rejects(
     new EmbeddingBatcher(client).embed(

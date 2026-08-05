@@ -36,6 +36,7 @@ const browserScheduler: ControllerScheduler = {
 
 export class EditorSuggestionController {
   private latestRequestId = 0;
+  private currentDocumentVersion = 0;
   private timerId: TimerHandle | null = null;
   private scheduledKey: string | null = null;
   private latestKey: string | null = null;
@@ -51,6 +52,14 @@ export class EditorSuggestionController {
 
   constructor(scheduler: ControllerScheduler = browserScheduler) {
     this.scheduler = scheduler;
+  }
+
+  get documentVersion(): number {
+    return this.currentDocumentVersion;
+  }
+
+  noteDocumentChange(): void {
+    this.currentDocumentVersion += 1;
   }
 
   schedule(

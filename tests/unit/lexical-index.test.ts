@@ -40,12 +40,20 @@ test("ranks titles, aliases, headings, tags, fuzzy labels and body text", () => 
     "Plant transpiration",
     "Plants lose water through their leaves."
   ));
+  index.upsert(createDocument(
+    "Wellbeing.md",
+    "Daily notes",
+    "",
+    { tags: ["topics/wellbeing"] }
+  ));
 
   assert.equal(search(index, "water intake")[0]?.targetPath, "Hydration.md");
   assert.ok(search(index, "water intake")[0]?.matchKinds.includes("alias"));
   assert.equal(search(index, "evaporation")[0]?.targetHeading, "Evaporation");
   assert.equal(search(index, "transpiraton", "plant transpiraton")[0]?.targetPath, "Plants.md");
   assert.equal(search(index, "health")[0]?.targetPath, "Hydration.md");
+  assert.equal(search(index, "wellbeing")[0]?.targetPath, "Wellbeing.md");
+  assert.ok(search(index, "wellbeing")[0]?.matchKinds.includes("tag"));
   assert.equal(search(index, "atmosphere", "water returns atmosphere")[0]?.targetPath, "Cycle.md");
 });
 
@@ -59,10 +67,16 @@ test("excludes the source note and removes stale postings", () => {
   assert.deepEqual(search(index, "water", "water", "A.md"), []);
 });
 
-test("tracks exact labels through replacements", () => {
+test("tracks exact title and alias triggers through replacements", () => {
   const index = new LexicalIndex();
-  index.upsert(createDocument("A.md", "Old title", "body", { aliases: ["Old alias"] }));
+  index.upsert(createDocument("A.md", "Old title", "body", {
+    aliases: ["Old alias"],
+    headings: [{ text: "Old heading", level: 2 }],
+    tags: ["old-tag"]
+  }));
   assert.equal(index.hasExactLabel("Old alias"), true);
+  assert.equal(index.hasExactLabel("Old heading"), false);
+  assert.equal(index.hasExactLabel("old-tag"), false);
 
   index.upsert(createDocument("A.md", "New title", "body"));
   assert.equal(index.hasExactLabel("Old alias"), false);

@@ -20,7 +20,9 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 export class LexicalVaultIndex {
   private readonly index = new LexicalIndex();
   private readonly refreshTimers = new Map<string, TimerHandle>();
+  private readonly refreshVersions = new Map<string, number>();
   private rebuildTimer: TimerHandle | null = null;
+  private scopeSignature: string;
   private generation = 0;
   private readyState = false;
   private disposed = false;
@@ -28,7 +30,9 @@ export class LexicalVaultIndex {
   constructor(
     private readonly app: App,
     private readonly getSettings: () => SemanticLinksSettings
-  ) {}
+  ) {
+    this.scopeSignature = createScopeSignature(getSettings());
+  }
 
   get ready(): boolean {
     return this.readyState && !this.disposed;
@@ -66,7 +70,11 @@ export class LexicalVaultIndex {
       const file = files[index];
       if (file !== undefined) {
         const document = await this.readDocument(file);
-        if (document !== null && !this.shouldStop(generation, signal)) {
+        if (
+          document !== null
+          && document !== undefined
+          && !this.shouldStop(generation, signal)
+        ) {
           this.index.upsert(document);
         }
       }
@@ -84,31 +92,33 @@ export class LexicalVaultIndex {
     if (this.disposed || file.extension.toLocaleLowerCase() !== "md") {
       return;
     }
-    const previous = this.refreshTimers.get(file.path);
+
+    const path = file.path;
+    const version = (this.refreshVersions.get(path) ?? 0) + 1;
+    this.refreshVersions.set(path, version);
+
+    const previous = this.refreshTimers.get(path);
     if (previous !== undefined) {
       globalThis.clearTimeout(previous);
     }
     const timer = globalThis.setTimeout(() => {
-      this.refreshTimers.delete(file.path);
-      void this.refresh(file);
+      this.refreshTimers.delete(path);
+      void this.refresh(file, path, version, this.generation);
     }, Math.max(0, delayMs));
-    this.refreshTimers.set(file.path, timer);
+    this.refreshTimers.set(path, timer);
   }
 
-  scheduleRebuild(delayMs = 500): void {
-    if (this.disposed) {
+  scheduleScopeRebuild(delayMs = 500): void {
+    const signature = createScopeSignature(this.getSettings());
+    if (this.disposed || signature === this.scopeSignature) {
       return;
     }
-    if (this.rebuildTimer !== null) {
-      globalThis.clearTimeout(this.rebuildTimer);
-    }
-    this.rebuildTimer = globalThis.setTimeout(() => {
-      this.rebuildTimer = null;
-      void this.rebuild();
-    }, Math.max(0, delayMs));
+    this.scopeSignature = signature;
+    this.scheduleRebuild(delayMs);
   }
 
   remove(path: string): void {
+    this.refreshVersions.set(path, (this.refreshVersions.get(path) ?? 0) + 1);
     const timer = this.refreshTimers.get(path);
     if (timer !== undefined) {
       globalThis.clearTimeout(timer);
@@ -125,6 +135,7 @@ export class LexicalVaultIndex {
     this.generation += 1;
     this.readyState = false;
     this.clearRefreshTimers();
+    this.refreshVersions.clear();
     if (this.rebuildTimer !== null) {
       globalThis.clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
@@ -132,31 +143,48 @@ export class LexicalVaultIndex {
     this.index.clear();
   }
 
-  private async refresh(file: TFile): Promise<void> {
-    if (this.disposed) {
-      return;
+  private scheduleRebuild(delayMs: number): void {
+    if (this.rebuildTimer !== null) {
+      globalThis.clearTimeout(this.rebuildTimer);
     }
+    this.rebuildTimer = globalThis.setTimeout(() => {
+      this.rebuildTimer = null;
+      void this.rebuild();
+    }, Math.max(0, delayMs));
+  }
+
+  private async refresh(
+    file: TFile,
+    path: string,
+    version: number,
+    generation: number
+  ): Promise<void> {
     const document = await this.readDocument(file);
-    if (this.disposed) {
+    if (
+      this.shouldStop(generation)
+      || file.path !== path
+      || this.refreshVersions.get(path) !== version
+      || document === undefined
+    ) {
       return;
     }
     if (document === null) {
-      this.index.remove(file.path);
+      this.index.remove(path);
     } else {
       this.index.upsert(document);
     }
   }
 
-  private async readDocument(file: TFile): Promise<LexicalDocumentInput | null> {
+  private async readDocument(
+    file: TFile
+  ): Promise<LexicalDocumentInput | null | undefined> {
     if (isFileExcluded(this.app.metadataCache, file, this.getSettings())) {
       return null;
     }
 
     try {
-      const [content, cache] = await Promise.all([
-        this.app.vault.cachedRead(file),
-        Promise.resolve(this.app.metadataCache.getFileCache(file))
-      ]);
+      const content = await this.app.vault.cachedRead(file);
+      const cache = this.app.metadataCache.getFileCache(file);
       const frontmatter: unknown = cache?.frontmatter;
       const title = readFrontmatterTitle(frontmatter) ?? file.basename;
       return {
@@ -169,7 +197,7 @@ export class LexicalVaultIndex {
         body: stripMarkdownForLexicalIndex(content)
       };
     } catch {
-      return null;
+      return undefined;
     }
   }
 
@@ -185,6 +213,13 @@ export class LexicalVaultIndex {
     }
     this.refreshTimers.clear();
   }
+}
+
+function createScopeSignature(settings: SemanticLinksSettings): string {
+  return JSON.stringify([
+    [...settings.excludedFolders].sort(),
+    [...settings.excludedTags].sort()
+  ]);
 }
 
 function readFrontmatterTitle(value: unknown): string | null {

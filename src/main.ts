@@ -25,14 +25,15 @@ import type { SemanticLinksSettings } from "./settings/types.ts";
 import { FoundationSuggestionModal } from "./ui/foundation-suggestion-modal.ts";
 
 export default class SemanticLinksPlugin extends Plugin {
-  settings: SemanticLinksSettings = createDefaultSettings();
+  override settings: SemanticLinksSettings = createDefaultSettings();
 
   private readonly controllers = new EditorControllerRegistry();
   private readonly lifecycle = new AbortController();
   private statusBarElement: HTMLElement | null = null;
 
   override async onload(): Promise<void> {
-    const loaded = loadAndMigrateSettings(await this.loadData() as unknown);
+    const savedData: unknown = await this.loadData();
+    const loaded = loadAndMigrateSettings(savedData);
     this.settings = loaded.settings;
     if (loaded.needsSave) {
       await this.saveSettings();

@@ -28,7 +28,9 @@ export function extractIndexedNoteMetadata(
         level: heading.level
       }))
       .filter((heading) => heading.text.length > 0),
-    tags: [...new Set(getAllTags(cache) ?? [])].sort()
+    tags: cache === null
+      ? []
+      : [...new Set(getAllTags(cache) ?? [])].sort()
   };
 }
 

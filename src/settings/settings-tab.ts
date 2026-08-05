@@ -17,6 +17,8 @@ import type { SemanticLinksSettings } from "./types.ts";
 type SettingsHost = Plugin & {
   settings: SemanticLinksSettings;
   saveSettings(): Promise<void>;
+  openModelSetup?(): void;
+  requestModelRemoval?(): void;
 };
 
 type SettingKey = keyof SemanticLinksSettings & string;
@@ -79,9 +81,10 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
           defaultValue: DEFAULT_SETTINGS.lexicalMatchingEnabled
         }
       },
+      this.modelSetting(),
       {
         name: "Semantic indexing",
-        desc: "Prepare and persist eligible Markdown passages for local embeddings. The model remains disabled until its separate consent-based runtime is available.",
+        desc: "Prepare eligible Markdown passages and keep their local vectors current when the semantic model is enabled.",
         aliases: ["embeddings", "model matching", "persistent index"],
         control: {
           type: "toggle",
@@ -91,7 +94,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       },
       {
         name: "Minimum confidence",
-        desc: "Hide candidates below this normalized lexical score.",
+        desc: "Hide lexical candidates below this normalized score. Semantic similarity is rank-normalized before hybrid scoring.",
         aliases: ["confidence threshold", "minimum score"],
         control: {
           type: "number",
@@ -145,6 +148,40 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         }
       }
     ];
+  }
+
+  private modelSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Local semantic model",
+      aliases: ["download model", "remove model", "semantic matching", "E5"],
+      render: (setting) => {
+        const installed = this.owner.settings.semanticModelInstalled;
+        setting.setDesc(installed
+          ? "The verified multilingual model is stored locally. Disable it to keep the files without running semantic queries."
+          : "Download the verified multilingual model after reviewing its size and local-only privacy details.");
+        if (installed) {
+          setting.addToggle((toggle) => {
+            toggle
+              .setValue(this.owner.settings.semanticModelEnabled)
+              .onChange((value) => {
+                this.owner.settings.semanticModelEnabled = value;
+                void this.owner.saveSettings();
+              });
+          });
+          setting.addButton((button) => {
+            button.setWarning().setButtonText("Remove").onClick(() => {
+              this.owner.requestModelRemoval?.();
+            });
+          });
+        } else {
+          setting.addButton((button) => {
+            button.setCta().setButtonText("Set up").onClick(() => {
+              this.owner.openModelSetup?.();
+            });
+          });
+        }
+      }
+    };
   }
 
   private heading(name: string): SettingDefinitionItem<SettingKey> {

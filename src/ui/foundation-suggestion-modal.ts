@@ -1,6 +1,6 @@
 import {
-  App,
   SuggestModal,
+  type App,
   type TFile
 } from "obsidian";
 
@@ -25,16 +25,9 @@ export class FoundationSuggestionModal extends SuggestModal<TFile> {
       return [...this.candidates];
     }
 
-    return this.candidates.filter((file) => {
-      const path = file.path.toLocaleLowerCase();
-      const aliases = this.app.metadataCache.getFileCache(file)?.frontmatter?.["aliases"];
-      const aliasText = Array.isArray(aliases)
-        ? aliases.filter((alias): alias is string => typeof alias === "string").join(" ")
-        : typeof aliases === "string"
-          ? aliases
-          : "";
-      return `${path} ${aliasText}`.toLocaleLowerCase().includes(normalizedQuery);
-    });
+    return this.candidates.filter((file) => file.path
+      .toLocaleLowerCase()
+      .includes(normalizedQuery));
   }
 
   renderSuggestion(file: TFile, element: HTMLElement): void {

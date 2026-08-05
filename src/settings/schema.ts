@@ -26,6 +26,8 @@ const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
   "automaticSuggestions",
   "lexicalMatchingEnabled",
   "semanticIndexingEnabled",
+  "semanticModelEnabled",
+  "semanticModelInstalled",
   "debounceMs",
   "maxSuggestions",
   "minimumConfidence",
@@ -48,6 +50,11 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
   const version = typeof rawVersion === "number" && Number.isInteger(rawVersion)
     ? rawVersion
     : 0;
+  const modelInstalled = readBoolean(
+    input,
+    "semanticModelInstalled",
+    DEFAULT_SETTINGS.semanticModelInstalled
+  );
   const settings: SemanticLinksSettings = {
     settingsVersion: SETTINGS_VERSION,
     automaticSuggestions: readBoolean(
@@ -61,6 +68,12 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
       DEFAULT_SETTINGS.lexicalMatchingEnabled
     ),
     semanticIndexingEnabled: readSemanticToggle(input),
+    semanticModelEnabled: modelInstalled && readBoolean(
+      input,
+      "semanticModelEnabled",
+      modelInstalled
+    ),
+    semanticModelInstalled: modelInstalled,
     debounceMs: Math.round(readClampedNumber(
       input,
       "debounceMs",
@@ -127,7 +140,6 @@ function readSemanticToggle(record: Record<string, unknown>): boolean {
       return value;
     }
   }
-
   return DEFAULT_SETTINGS.semanticIndexingEnabled;
 }
 
@@ -157,6 +169,8 @@ function matchesCurrentSettings(
     && record["automaticSuggestions"] === settings.automaticSuggestions
     && record["lexicalMatchingEnabled"] === settings.lexicalMatchingEnabled
     && record["semanticIndexingEnabled"] === settings.semanticIndexingEnabled
+    && record["semanticModelEnabled"] === settings.semanticModelEnabled
+    && record["semanticModelInstalled"] === settings.semanticModelInstalled
     && record["debounceMs"] === settings.debounceMs
     && record["maxSuggestions"] === settings.maxSuggestions
     && record["minimumConfidence"] === settings.minimumConfidence

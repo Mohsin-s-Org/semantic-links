@@ -144,10 +144,7 @@ function splitIntoBlocks(markdown: string): SourceBlock[] {
     if (fence !== null) {
       if (
         (fence === "math" && /^\s*\$\$\s*$/u.test(line.text))
-        || (fence === "code" && new RegExp(
-          `^\\s{0,3}${escapeRegExp(fenceMarker)}\\s*$`,
-          "u"
-        ).test(line.text))
+        || (fence === "code" && isClosingCodeFence(line.text, fenceMarker))
       ) {
         fence = null;
         fenceMarker = "";
@@ -168,14 +165,23 @@ function splitIntoBlocks(markdown: string): SourceBlock[] {
       continue;
     }
 
+    const setext = lines[index + 1]?.text.match(/^\s{0,3}(=+|-+)\s*$/u);
+    if (trimmed.length > 0 && setext !== undefined && setext !== null) {
+      flush();
+      const text = stripMarkdownForLexicalIndex(line.text);
+      if (text.length > 0) {
+        updateHeading(headings, setext[1]?.startsWith("=") === true ? 1 : 2, text);
+      }
+      index += 1;
+      continue;
+    }
+
     const heading = line.text.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/u);
     if (heading !== null) {
       flush();
-      const level = heading[1]?.length ?? 1;
       const text = stripMarkdownForLexicalIndex(heading[2] ?? "");
-      headings.length = Math.max(0, level - 1);
       if (text.length > 0) {
-        headings[level - 1] = text;
+        updateHeading(headings, heading[1]?.length ?? 1, text);
       }
       continue;
     }
@@ -188,6 +194,22 @@ function splitIntoBlocks(markdown: string): SourceBlock[] {
   }
   flush();
   return blocks;
+}
+
+function updateHeading(
+  headings: string[],
+  level: number,
+  text: string
+): void {
+  headings.length = Math.min(headings.length, Math.max(0, level - 1));
+  headings.push(text);
+}
+
+function isClosingCodeFence(line: string, opener: string): boolean {
+  const marker = line.match(/^\s{0,3}(`+|~+)\s*$/u)?.[1];
+  return marker !== undefined
+    && marker[0] === opener[0]
+    && marker.length >= opener.length;
 }
 
 function splitOversizedBlock(
@@ -410,8 +432,4 @@ function countNewlines(value: string): number {
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length
     && left.every((value, index) => value === right[index]);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

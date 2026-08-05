@@ -43,7 +43,7 @@ export function createVerifiedFetch(
       ...init,
       signal: lifecycleSignal
     });
-    if (!response.ok || expectation === null || requestMethod(input, init) === "HEAD") {
+    if (!response.ok || requestMethod(input, init) === "HEAD") {
       return response;
     }
     return expectation.json
@@ -62,7 +62,7 @@ export function onnxWasmPaths(): { mjs: string; wasm: string } {
   };
 }
 
-function expectationFor(url: URL): AssetExpectation | null {
+function expectationFor(url: URL): AssetExpectation {
   if (url.hostname === "huggingface.co" && url.pathname.startsWith(MODEL_PREFIX)) {
     const relative = decodeURIComponent(url.pathname.slice(MODEL_PREFIX.length));
     const expectation = MODEL_ASSETS[relative];
@@ -79,7 +79,9 @@ function expectationFor(url: URL): AssetExpectation | null {
     }
     return asset;
   }
-  return null;
+  throw new Error(
+    `The local model attempted unapproved network access: ${url.origin}${url.pathname}`
+  );
 }
 
 async function verifySmallJson(

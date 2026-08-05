@@ -1,4 +1,4 @@
-export type LexicalMatchKind = "title" | "alias" | "heading" | "tag" | "body";
+export type LexicalMatchKind = "title" | "alias" | "heading" | "tag" | "body" | "semantic";
 
 export interface LexicalHeadingInput {
   text: string;

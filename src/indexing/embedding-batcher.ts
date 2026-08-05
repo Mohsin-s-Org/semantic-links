@@ -13,7 +13,7 @@ export class EmbeddingBatcher {
   private readonly client: EmbeddingClient;
   private readonly batchSize: number;
 
-  constructor(client: EmbeddingClient, batchSize = 8) {
+  constructor(client: EmbeddingClient, batchSize = 4) {
     if (!Number.isInteger(batchSize) || batchSize < 1) {
       throw new Error("Embedding batch size must be a positive integer.");
     }

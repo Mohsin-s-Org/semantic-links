@@ -211,12 +211,14 @@ export class PersistentIndexStore {
 
 export function createEmptyIndexManifest(
   pluginVersion: string,
-  vaultFingerprint: string
+  vaultFingerprint: string,
+  scopeFingerprint: string
 ): IndexManifest {
   return {
     schemaVersion: INDEX_SCHEMA_VERSION,
     pluginVersion,
     vaultFingerprint,
+    scopeFingerprint,
     model: null,
     vectorCount: 0,
     dimensions: 0,
@@ -299,6 +301,7 @@ function parseManifest(value: string): IndexManifest {
     schemaVersion: readInteger(input, "schemaVersion"),
     pluginVersion: readString(input, "pluginVersion"),
     vaultFingerprint: readString(input, "vaultFingerprint"),
+    scopeFingerprint: readString(input, "scopeFingerprint"),
     model,
     vectorCount: readInteger(input, "vectorCount"),
     dimensions: readInteger(input, "dimensions"),

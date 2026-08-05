@@ -1,0 +1,17 @@
+node_modules/
+main.js
+*.map
+coverage/
+.DS_Store
+
+# Obsidian local data and generated indexes
+data.json
+index/
+model/
+models/
+*.onnx
+*.wasm
+
+# Local vaults
+.obsidian/
+test-vault/

@@ -49,7 +49,7 @@ const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
   "changed-anchor": "The text changed before the link could be inserted.",
   "already-linked": "The selected text is already inside a wikilink.",
   "protected-context": "Links cannot be inserted in this Markdown context.",
-  "target-not-found": "The target note no longer exists.",
+  "target-not-found": "The target note or heading no longer exists.",
   "invalid-target": "Obsidian could not create a valid link target.",
   "dispatch-failed": "The editor rejected the link transaction."
 };
@@ -115,8 +115,8 @@ export default class SemanticLinksPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
     this.lexicalIndex?.scheduleScopeRebuild();
+    await this.saveData(this.settings);
   }
 
   private async initializeLexicalIndex(): Promise<void> {
@@ -165,6 +165,9 @@ export default class SemanticLinksPlugin extends Plugin {
     controller: EditorSuggestionController,
     documentVersion: number
   ): void {
+    controller.hideVisibleSuggestions();
+    hideSuggestions(view);
+
     const lexicalIndex = this.lexicalIndex;
     if (
       lexicalIndex === null
@@ -172,19 +175,16 @@ export default class SemanticLinksPlugin extends Plugin {
       || !this.settings.automaticSuggestions
       || !this.settings.lexicalMatchingEnabled
     ) {
-      this.hideCurrentSuggestions(view, controller);
       return;
     }
 
     const sourceFile = this.app.workspace.getActiveFile();
     if (sourceFile === null || this.isExcluded(sourceFile)) {
-      this.hideCurrentSuggestions(view, controller);
       return;
     }
 
     const context = this.readContext(view);
     if (context === null || !this.isEligibleAutomaticAnchor(context.anchor.text)) {
-      this.hideCurrentSuggestions(view, controller);
       return;
     }
 
@@ -311,8 +311,6 @@ export default class SemanticLinksPlugin extends Plugin {
 
     showSuggestions(view, {
       requestKey: currentKey,
-      anchorStart: context.anchor.start,
-      anchorEnd: context.anchor.end,
       suggestions,
       selectedIndex: 0,
       keyboardActive
@@ -364,8 +362,8 @@ export default class SemanticLinksPlugin extends Plugin {
         active.view,
         {
           sourcePath: sourceFile.path,
-          anchorStart: popup.anchorStart,
-          anchorEnd: popup.anchorEnd,
+          anchorStart: popup.requestKey.anchorStart,
+          anchorEnd: popup.requestKey.anchorEnd,
           expectedText: popup.requestKey.anchorText,
           targetPath: suggestion.targetPath,
           targetHeading: suggestion.targetHeading,
@@ -418,14 +416,6 @@ export default class SemanticLinksPlugin extends Plugin {
   private isEligibleAutomaticAnchor(value: string): boolean {
     return this.lexicalIndex?.hasExactLabel(value) === true
       || meaningfulLexicalTokens(value, 1).length > 0;
-  }
-
-  private hideCurrentSuggestions(
-    view: EditorView,
-    controller: EditorSuggestionController
-  ): void {
-    controller.hideVisibleSuggestions();
-    hideSuggestions(view);
   }
 
   private isExcluded(file: TFile): boolean {

@@ -29,19 +29,23 @@ if (typeof filename !== "string") {
 }
 const archive = path.join(outputDir, filename);
 await verifyIntegrity(archive, EXPECTED_INTEGRITY);
-
-const extracted = spawnSync(
-  "tar",
-  ["-xzf", archive, "--strip-components=2", "-C", outputDir,
-    "package/dist/transformers.web.js", "package/LICENSE"],
-  { encoding: "utf8" }
-);
+extract(archive, 2, "package/dist/transformers.web.js");
+extract(archive, 1, "package/LICENSE");
 await rm(archive, { force: true });
-if (extracted.status !== 0) {
-  throw new Error(extracted.stderr || "Unable to extract the Transformers.js browser runtime.");
-}
+
 if (!await isPrepared(runtimePath)) {
   throw new Error("The Transformers.js browser runtime was not extracted.");
+}
+
+function extract(archive, stripComponents, member) {
+  const result = spawnSync(
+    "tar",
+    ["-xzf", archive, `--strip-components=${stripComponents}`, "-C", outputDir, member],
+    { encoding: "utf8" }
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || `Unable to extract ${member}.`);
+  }
 }
 
 async function verifyIntegrity(file, integrity) {

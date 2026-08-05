@@ -10,6 +10,8 @@ export const DEFAULT_SETTINGS: Readonly<SemanticLinksSettings> = Object.freeze({
   automaticSuggestions: true,
   lexicalMatchingEnabled: true,
   semanticIndexingEnabled: false,
+  semanticModelEnabled: false,
+  semanticModelInstalled: false,
   debounceMs: DEFAULT_DEBOUNCE_MS,
   maxSuggestions: DEFAULT_MAX_SUGGESTIONS,
   minimumConfidence: 0.55,

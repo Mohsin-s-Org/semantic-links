@@ -71,8 +71,8 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       this.heading("Matching"),
       {
         name: "Lexical matching",
-        desc: "Use titles, aliases and normalized terms. This remains available without a model.",
-        aliases: ["title matching", "alias matching"],
+        desc: "Use note titles, aliases, headings, tags and normalized note text. No model download is required.",
+        aliases: ["title matching", "alias matching", "fuzzy matching"],
         control: {
           type: "toggle",
           key: "lexicalMatchingEnabled",
@@ -81,7 +81,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       },
       {
         name: "Semantic indexing",
-        desc: "Reserve semantic matching for the later local-model phase. Phase 1 stores the preference but performs no model work.",
+        desc: "Reserve embedding-based matching for a later local-model phase. Phase 2 performs no model or network work.",
         aliases: ["embeddings", "model matching"],
         control: {
           type: "toggle",
@@ -91,7 +91,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       },
       {
         name: "Minimum confidence",
-        desc: "Hide candidates below this normalized score.",
+        desc: "Hide candidates below this normalized lexical score.",
         aliases: ["confidence threshold", "minimum score"],
         control: {
           type: "number",

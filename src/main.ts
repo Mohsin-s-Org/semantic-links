@@ -6,9 +6,9 @@ import {
   type TFile
 } from "obsidian";
 import { findTextAnchor, type TextAnchor } from "./editor/anchor.ts";
-import {
+import type {
   EditorSuggestionController,
-  type SuggestionRequestTicket
+  SuggestionRequestTicket
 } from "./editor/controller.ts";
 import { createControllerExtension } from "./editor/extension.ts";
 import {

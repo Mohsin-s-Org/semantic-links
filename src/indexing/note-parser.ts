@@ -42,20 +42,30 @@ export async function parseIndexDocument(
     const headings = readHeadings(cache);
     const outgoingPaths = readOutgoingPaths(app, file, cache);
     const documentId = createDocumentId(file.path);
-    const drafts = chunkMarkdown(content, title);
-    const chunks: IndexedChunk[] = drafts.map((draft) => ({
-      id: createChunkId(documentId, draft.startOffset, draft.endOffset, draft.embeddingText),
-      documentId,
-      headingPath: draft.headingPath,
-      startOffset: draft.startOffset,
-      endOffset: draft.endOffset,
-      startLine: draft.startLine,
-      endLine: draft.endLine,
-      textPreview: draft.textPreview,
-      lexicalTerms: draft.lexicalTerms,
-      embeddingText: draft.embeddingText,
-      vectorRow: -1
-    }));
+    const occurrences = new Map<string, number>();
+    const chunks: IndexedChunk[] = chunkMarkdown(content, title).map((draft) => {
+      const identity = JSON.stringify([draft.headingPath, draft.embeddingText]);
+      const occurrence = occurrences.get(identity) ?? 0;
+      occurrences.set(identity, occurrence + 1);
+      return {
+        id: createChunkId(
+          documentId,
+          draft.headingPath,
+          draft.embeddingText,
+          occurrence
+        ),
+        documentId,
+        headingPath: draft.headingPath,
+        startOffset: draft.startOffset,
+        endOffset: draft.endOffset,
+        startLine: draft.startLine,
+        endLine: draft.endLine,
+        textPreview: draft.textPreview,
+        lexicalTerms: draft.lexicalTerms,
+        embeddingText: draft.embeddingText,
+        vectorRow: -1
+      };
+    });
     const contentHash = hashText(JSON.stringify({
       path: file.path,
       title,

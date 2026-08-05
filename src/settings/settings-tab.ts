@@ -20,7 +20,7 @@ type SettingsHost = Plugin & {
 };
 
 type SettingKey = keyof SemanticLinksSettings & string;
-type ListSettingKey = "excludedFolders" | "excludedTags";
+type ListSettingKey = "excludedFolders" | "excludedFiles" | "excludedTags" | "excludedProperties";
 
 export class SemanticLinksSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly owner: SettingsHost) {
@@ -81,8 +81,8 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       },
       {
         name: "Semantic indexing",
-        desc: "Reserve embedding-based matching for a later local-model phase. Phase 2 performs no model or network work.",
-        aliases: ["embeddings", "model matching"],
+        desc: "Prepare and persist eligible Markdown passages for local embeddings. The model remains disabled until its separate consent-based runtime is available.",
+        aliases: ["embeddings", "model matching", "persistent index"],
         control: {
           type: "toggle",
           key: "semanticIndexingEnabled",
@@ -110,11 +110,24 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         "Archive\nPrivate"
       ),
       this.listSetting(
+        "excludedFiles",
+        "Excluded files",
+        "One vault-relative Markdown path per line or a comma-separated list.",
+        "Private/Journal.md\nArchive/Old notes.md"
+      ),
+      this.listSetting(
         "excludedTags",
         "Excluded tags",
         "One tag per line or a comma-separated list. A leading # is optional.",
         "private\ndraft",
         (values) => values.map((tag) => tag.replace(/^#/u, "").toLocaleLowerCase())
+      ),
+      this.listSetting(
+        "excludedProperties",
+        "Excluded properties",
+        "Exclude a note when any named frontmatter property is present. Names are case-insensitive.",
+        "private\nno-index",
+        (values) => values.map((property) => property.toLocaleLowerCase())
       ),
       this.heading("Link insertion"),
       {

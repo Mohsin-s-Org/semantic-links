@@ -28,17 +28,6 @@ export type SuggestionRequestRunner = (
 
 export type ScheduleResult = "scheduled" | "duplicate" | "suppressed" | "disposed";
 
-export interface ControllerStateSnapshot {
-  latestRequestId: number;
-  scheduledKey: string | null;
-  pendingKeys: string[];
-  suppressedUntil: number;
-  composing: boolean;
-  applyingPluginTransaction: boolean;
-  visibleContextHash: string | null;
-  disposed: boolean;
-}
-
 const browserScheduler: ControllerScheduler = {
   now: () => Date.now(),
   setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
@@ -72,7 +61,6 @@ export class EditorSuggestionController {
     if (this.disposed) {
       return "disposed";
     }
-
     if (this.shouldSuppress()) {
       return "suppressed";
     }
@@ -87,16 +75,15 @@ export class EditorSuggestionController {
     }
 
     this.cancelScheduledRequest();
+    this.supersedeInFlightRequests();
+    this.lastCompletedKey = null;
     this.scheduledKey = serializedKey;
     this.timerId = this.scheduler.setTimeout(() => {
       this.timerId = null;
       this.scheduledKey = null;
-
-      if (this.shouldSuppress()) {
-        return;
+      if (!this.shouldSuppress()) {
+        this.startRequest(key, serializedKey, runner);
       }
-
-      this.startRequest(key, serializedKey, runner);
     }, Math.max(0, delayMs));
 
     return "scheduled";
@@ -106,19 +93,17 @@ export class EditorSuggestionController {
     ticket: SuggestionRequestTicket,
     currentKey: SuggestionRequestKey
   ): boolean {
-    const currentSerializedKey = serializeRequestKey(currentKey);
     const accepted = !this.disposed
       && !ticket.signal.aborted
       && ticket.requestId === this.latestRequestId
       && ticket.serializedKey === this.latestKey
-      && ticket.serializedKey === currentSerializedKey
+      && ticket.serializedKey === serializeRequestKey(currentKey)
       && this.pendingKeys.has(ticket.serializedKey)
       && !this.shouldSuppress();
 
     if (accepted) {
       this.visibleContextHash = ticket.key.contextHash;
     }
-
     return accepted;
   }
 
@@ -173,34 +158,14 @@ export class EditorSuggestionController {
     this.lastCompletedKey = null;
     this.visibleContextHash = null;
     this.cancelScheduledRequest();
-
-    for (const controller of this.abortControllers.values()) {
-      controller.abort();
-    }
-    this.abortControllers.clear();
-    this.pendingKeys.clear();
+    this.cancelInFlightRequests();
   }
 
   dispose(): void {
-    if (this.disposed) {
-      return;
+    if (!this.disposed) {
+      this.invalidate();
+      this.disposed = true;
     }
-
-    this.invalidate();
-    this.disposed = true;
-  }
-
-  getSnapshot(): ControllerStateSnapshot {
-    return {
-      latestRequestId: this.latestRequestId,
-      scheduledKey: this.scheduledKey,
-      pendingKeys: [...this.pendingKeys],
-      suppressedUntil: this.suppressedUntil,
-      composing: this.composing,
-      applyingPluginTransaction: this.applyingPluginTransaction,
-      visibleContextHash: this.visibleContextHash,
-      disposed: this.disposed
-    };
   }
 
   private shouldSuppress(): boolean {
@@ -217,17 +182,29 @@ export class EditorSuggestionController {
     this.scheduledKey = null;
   }
 
-  private startRequest(
-    key: SuggestionRequestKey,
-    serializedKey: string,
-    runner: SuggestionRequestRunner
-  ): void {
+  private supersedeInFlightRequests(): void {
+    if (this.abortControllers.size === 0) {
+      return;
+    }
+
+    this.latestRequestId += 1;
+    this.latestKey = null;
+    this.cancelInFlightRequests();
+  }
+
+  private cancelInFlightRequests(): void {
     for (const controller of this.abortControllers.values()) {
       controller.abort();
     }
     this.abortControllers.clear();
     this.pendingKeys.clear();
+  }
 
+  private startRequest(
+    key: SuggestionRequestKey,
+    serializedKey: string,
+    runner: SuggestionRequestRunner
+  ): void {
     const requestId = this.latestRequestId + 1;
     this.latestRequestId = requestId;
     this.latestKey = serializedKey;
@@ -244,21 +221,21 @@ export class EditorSuggestionController {
 
     try {
       const result = runner(ticket);
-      void Promise.resolve(result)
-        .catch(() => undefined)
-        .finally(() => {
-          this.finishRequest(ticket);
-        });
+      void Promise.resolve(result).then(
+        () => this.finishRequest(ticket, true),
+        () => this.finishRequest(ticket, false)
+      );
     } catch {
-      this.finishRequest(ticket);
+      this.finishRequest(ticket, false);
     }
   }
 
-  private finishRequest(ticket: SuggestionRequestTicket): void {
+  private finishRequest(ticket: SuggestionRequestTicket, succeeded: boolean): void {
     this.pendingKeys.delete(ticket.serializedKey);
     this.abortControllers.delete(ticket.requestId);
     if (
-      ticket.requestId === this.latestRequestId
+      succeeded
+      && ticket.requestId === this.latestRequestId
       && ticket.serializedKey === this.latestKey
       && !ticket.signal.aborted
     ) {

@@ -97,31 +97,28 @@ test("newer work aborts and supersedes stale work", () => {
     documentVersion: 2,
     contextHash: createContextHash("new context")
   });
-  let firstTicket: SuggestionRequestTicket | null = null;
-  let secondTicket: SuggestionRequestTicket | null = null;
+  const tickets: SuggestionRequestTicket[] = [];
   const pending = new Promise<void>(() => undefined);
 
   controller.schedule(firstKey, 0, (ticket) => {
-    firstTicket = ticket;
+    tickets.push(ticket);
     return pending;
   });
   scheduler.advanceBy(0);
   controller.schedule(secondKey, 0, (ticket) => {
-    secondTicket = ticket;
+    tickets.push(ticket);
     return pending;
   });
   scheduler.advanceBy(0);
 
-  assert.equal(firstTicket?.signal.aborted, true);
-  assert.equal(secondTicket?.signal.aborted, false);
-  assert.equal(
-    firstTicket === null ? true : controller.acceptResult(firstTicket, firstKey),
-    false
-  );
-  assert.equal(
-    secondTicket === null ? false : controller.acceptResult(secondTicket, secondKey),
-    true
-  );
+  const firstTicket = tickets[0];
+  const secondTicket = tickets[1];
+  assert.ok(firstTicket);
+  assert.ok(secondTicket);
+  assert.equal(firstTicket.signal.aborted, true);
+  assert.equal(secondTicket.signal.aborted, false);
+  assert.equal(controller.acceptResult(firstTicket, firstKey), false);
+  assert.equal(controller.acceptResult(secondTicket, secondKey), true);
 });
 
 test("undo and redo suppress immediate rescheduling", () => {

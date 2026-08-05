@@ -21,7 +21,7 @@ export function isFileExcluded(
     return true;
   }
   if (settings.excludedFolders.some((folder) => {
-    const normalized = normalizePath(folder).replace(/^\/+|\/+$/gu, "");
+    const normalized = normalizePath(folder);
     return normalized.length > 0
       && (path === normalized || path.startsWith(`${normalized}/`));
   })) {
@@ -41,15 +41,52 @@ export function isFileExcluded(
   }
 
   const frontmatter: unknown = cache.frontmatter;
-  if (!isRecord(frontmatter)) {
+  return isRecord(frontmatter)
+    && settings.excludedProperties.some((rule) => {
+      return matchesPropertyRule(frontmatter, rule);
+    });
+}
+
+function matchesPropertyRule(
+  frontmatter: Record<string, unknown>,
+  rule: string
+): boolean {
+  const separator = rule.indexOf("=");
+  const name = (separator < 0 ? rule : rule.slice(0, separator))
+    .trim()
+    .toLocaleLowerCase();
+  const key = Object.keys(frontmatter).find((entry) => {
+    return entry.toLocaleLowerCase() === name;
+  });
+  if (key === undefined) {
     return false;
   }
-  const properties = new Set(Object.keys(frontmatter).map((key) => key.toLocaleLowerCase()));
-  return settings.excludedProperties.some((property) => {
-    return properties.has(property.trim().toLocaleLowerCase());
-  });
+  if (separator < 0) {
+    return true;
+  }
+
+  const expected = rule.slice(separator + 1).trim().toLocaleLowerCase();
+  return propertyValues(frontmatter[key]).some((value) => value === expected);
+}
+
+function propertyValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => propertyValues(entry));
+  }
+  if (
+    value === null
+    || typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean"
+  ) {
+    return [String(value).trim().toLocaleLowerCase()];
+  }
+  return [];
 }
 
 function normalizePath(value: string): string {
-  return value.replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "").toLocaleLowerCase();
+  return value
+    .replace(/\\/gu, "/")
+    .replace(/^\/+|\/+$/gu, "")
+    .toLocaleLowerCase();
 }

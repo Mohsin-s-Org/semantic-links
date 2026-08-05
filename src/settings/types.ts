@@ -1,4 +1,4 @@
-import { SETTINGS_VERSION } from "../constants.ts";
+import type { SETTINGS_VERSION } from "../constants.ts";
 
 export type LinkPathMode = "shortest" | "full";
 

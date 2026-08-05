@@ -9,7 +9,7 @@ import {
 } from "@codemirror/view";
 import { EditorSuggestionController } from "./controller.ts";
 import { PLUGIN_LINK_INSERTION } from "./insertion.ts";
-import { EditorControllerRegistry } from "./registry.ts";
+import type { EditorControllerRegistry } from "./registry.ts";
 
 export type EditorDocumentChangeHandler = (
   view: EditorView,

@@ -38,6 +38,9 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Verify reproducible production bundle
+        run: npm run verify:reproducible-build
+
       - name: Check generated JavaScript syntax
         run: node --check main.js
 

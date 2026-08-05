@@ -42,6 +42,7 @@ import {
 } from "./editor/suggestion-popup.ts";
 import { hashText } from "./indexing/hash.ts";
 import { PersistentIndexManager } from "./indexing/index-manager.ts";
+import { createIndexScopeFingerprint } from "./indexing/scope-fingerprint.ts";
 import { meaningfulLexicalTokens } from "./lexical/text.ts";
 import type { LexicalSuggestion } from "./lexical/types.ts";
 import {
@@ -237,30 +238,32 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
       this.manifest.dir
       ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`
     );
+    const vaultFingerprint = hashText(this.app.vault.getName());
     const store = new PersistentIndexStore(
       this.app.vault.adapter,
       normalizePath(`${pluginRoot}/index`),
       () => createEmptyIndexManifest(
         this.manifest.version,
-        hashText(this.app.vault.getName())
+        vaultFingerprint,
+        createIndexScopeFingerprint(this.settings)
       )
     );
     const manager = new PersistentIndexManager(
       this.app,
       store,
       this.manifest.version,
-      hashText(this.app.vault.getName()),
+      vaultFingerprint,
       () => this.settings
     );
     this.indexManager = manager;
     this.bindIndexViews();
+    this.registerPersistentIndexEvents(manager);
 
     try {
       await manager.open();
       if (this.lifecycle.signal.aborted) {
         return;
       }
-      this.registerPersistentIndexEvents(manager);
       await manager.reconcile();
     } catch {
       new Notice("Semantic Links could not open the local semantic index. Lexical suggestions remain available.");

@@ -227,7 +227,9 @@ export class LexicalVaultIndex {
 function createScopeSignature(settings: SemanticLinksSettings): string {
   return JSON.stringify([
     [...settings.excludedFolders].sort(),
-    [...settings.excludedTags].sort()
+    [...settings.excludedFiles].sort(),
+    [...settings.excludedTags].sort(),
+    [...settings.excludedProperties].sort()
   ]);
 }
 

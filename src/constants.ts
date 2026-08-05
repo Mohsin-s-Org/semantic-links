@@ -1,4 +1,5 @@
 export const PLUGIN_ID = "semantic-links";
+export const SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions";
 export const SETTINGS_VERSION = 1 as const;
 export const DEFAULT_DEBOUNCE_MS = 350;
 export const MIN_DEBOUNCE_MS = 100;

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint unsafe TypeScript patterns
+        run: npm run lint
+
+      - name: Run unit and integration tests
+        run: npm test
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Check generated JavaScript syntax
+        run: node --check main.js
+
+      - name: Verify version agreement
+        run: npm run validate:versions
+
+      - name: Verify repository policy
+        run: npm run validate:repository
+
+      - name: Stage release assets
+        run: npm run stage:release
+
+      - name: Verify exact release allowlist
+        run: npm run validate:release-assets
+
+      - name: Run clean-vault smoke check
+        run: npm run smoke:clean-vault

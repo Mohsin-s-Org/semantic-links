@@ -29,9 +29,11 @@ export function createControllerExtension(
 ): Extension {
   return ViewPlugin.fromClass(class {
     private readonly controller = new EditorSuggestionController();
+    private readonly view: EditorView;
     private documentVersion = 0;
 
-    constructor(private readonly view: EditorView) {
+    constructor(view: EditorView) {
+      this.view = view;
       registry.register(view, this.controller);
       if (view.hasFocus) {
         registry.setActive(view);

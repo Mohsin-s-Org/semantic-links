@@ -51,9 +51,10 @@ export function readEnum<const T extends readonly string[]>(
   fallback: T[number]
 ): T[number] {
   const value = record[key];
-  return typeof value === "string" && allowed.includes(value)
-    ? value
-    : fallback;
+  const matched = typeof value === "string"
+    ? allowed.find((candidate) => candidate === value)
+    : undefined;
+  return matched ?? fallback;
 }
 
 export function normalizeDelimitedList(value: string): string[] {

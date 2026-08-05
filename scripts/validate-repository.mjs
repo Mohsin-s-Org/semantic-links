@@ -27,6 +27,7 @@ const requiredFiles = [
   "src/indexing/chunker.ts",
   "src/indexing/embedding-batcher.ts",
   "src/indexing/index-manager.ts",
+  "src/indexing/note-metadata.ts",
   "src/indexing/note-parser.ts",
   "src/indexing/scope-fingerprint.ts",
   "src/indexing/types.ts",

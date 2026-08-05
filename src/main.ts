@@ -156,13 +156,8 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
     this.controllers.dispose();
     this.lexicalIndex?.dispose();
     this.lexicalIndex = null;
-    const manager = this.indexManager;
+    this.indexManager?.dispose();
     this.indexManager = null;
-    if (manager !== null) {
-      void manager.flush().catch(() => undefined).finally(() => {
-        manager.dispose();
-      });
-    }
     this.app.workspace.detachLeavesOfType(INDEX_STATUS_VIEW_TYPE);
     this.statusBarElement = null;
   }

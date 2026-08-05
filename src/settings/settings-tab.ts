@@ -2,7 +2,6 @@ import {
   PluginSettingTab,
   type App,
   type Plugin,
-  type Setting,
   type SettingDefinitionItem
 } from "obsidian";
 import {
@@ -12,6 +11,7 @@ import {
   MIN_SUGGESTIONS
 } from "../constants.ts";
 import { normalizeDelimitedList } from "../utils/validation.ts";
+import { DEFAULT_SETTINGS } from "./defaults.ts";
 import type { SemanticLinksSettings } from "./types.ts";
 
 type SettingsHost = Plugin & {
@@ -37,7 +37,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "toggle",
           key: "automaticSuggestions",
-          defaultValue: true
+          defaultValue: DEFAULT_SETTINGS.automaticSuggestions
         }
       },
       {
@@ -47,7 +47,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "number",
           key: "debounceMs",
-          defaultValue: 350,
+          defaultValue: DEFAULT_SETTINGS.debounceMs,
           validate: (value) => value >= MIN_DEBOUNCE_MS && value <= MAX_DEBOUNCE_MS
             ? undefined
             : `Choose a value from ${MIN_DEBOUNCE_MS} to ${MAX_DEBOUNCE_MS}.`
@@ -60,7 +60,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "number",
           key: "maxSuggestions",
-          defaultValue: 6,
+          defaultValue: DEFAULT_SETTINGS.maxSuggestions,
           validate: (value) => Number.isInteger(value)
             && value >= MIN_SUGGESTIONS
             && value <= MAX_SUGGESTIONS
@@ -76,7 +76,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "toggle",
           key: "lexicalMatchingEnabled",
-          defaultValue: true
+          defaultValue: DEFAULT_SETTINGS.lexicalMatchingEnabled
         }
       },
       {
@@ -86,7 +86,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "toggle",
           key: "semanticIndexingEnabled",
-          defaultValue: false
+          defaultValue: DEFAULT_SETTINGS.semanticIndexingEnabled
         }
       },
       {
@@ -96,7 +96,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "number",
           key: "minimumConfidence",
-          defaultValue: 0.55,
+          defaultValue: DEFAULT_SETTINGS.minimumConfidence,
           validate: (value) => value >= 0 && value <= 1
             ? undefined
             : "Choose a value from 0 to 1."
@@ -114,7 +114,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         "Excluded tags",
         "One tag per line or a comma-separated list. A leading # is optional.",
         "private\ndraft",
-        (values) => values.map((tag) => tag.replace(/^#/u, ""))
+        (values) => values.map((tag) => tag.replace(/^#/u, "").toLocaleLowerCase())
       ),
       this.heading("Link insertion"),
       {
@@ -124,7 +124,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         control: {
           type: "dropdown",
           key: "linkPathMode",
-          defaultValue: "shortest",
+          defaultValue: DEFAULT_SETTINGS.linkPathMode,
           options: {
             shortest: "Shortest unambiguous path",
             full: "Full vault path"
@@ -154,7 +154,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
     return {
       name,
       desc: description,
-      render: (setting: Setting) => {
+      render: (setting) => {
         setting.addTextArea((text) => {
           text
             .setValue(this.owner.settings[key].join("\n"))

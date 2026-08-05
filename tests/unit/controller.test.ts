@@ -65,6 +65,7 @@ function createKey(overrides: Partial<SuggestionRequestKey> = {}): SuggestionReq
     documentVersion: 1,
     anchorStart: 4,
     anchorEnd: 9,
+    anchorText: "water",
     contextHash: createContextHash("some water context"),
     mode: "automatic",
     ...overrides
@@ -96,7 +97,8 @@ test("a new context aborts stale work before its debounce expires", () => {
   const secondKey = createKey({
     filePath: "Notes/other.md",
     documentVersion: 2,
-    contextHash: createContextHash("new context")
+    anchorText: "cycle",
+    contextHash: createContextHash("new cycle context")
   });
   const tickets: SuggestionRequestTicket[] = [];
   const pending = new Promise<void>(() => undefined);

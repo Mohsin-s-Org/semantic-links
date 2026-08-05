@@ -18,9 +18,7 @@ const args = [
   "--log-level=info"
 ];
 
-if (production) {
-  args.push("--minify");
-} else {
+if (!production) {
   args.push("--sourcemap=inline", "--watch");
 }
 

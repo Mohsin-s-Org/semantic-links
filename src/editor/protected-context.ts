@@ -3,24 +3,25 @@ interface TextRange {
   end: number;
 }
 
-const INLINE_PATTERNS = [
-  /\[\[[^\]\n]*\]\]/gu,
+const WIKILINK_PATTERN = /\[\[[^\]\n]*\]\]/gu;
+const PROTECTED_PATTERNS = [
+  WIKILINK_PATTERN,
   /\[[^\]\n]+\]\([^)\n]+\)/gu,
   /\b(?:https?:\/\/|www\.)[^\s<>()]+/giu,
   /(`+)(?!`)[\s\S]*?\1/gu,
   /\$\$[\s\S]*?\$\$/gu,
-  /(^|[^\\$])\$(?!\$)[^\n$]+\$/gmu,
   /<!--[\s\S]*?-->/gu,
   /<([A-Za-z][\w-]*)\b[^>]*>[\s\S]*?<\/\1\s*>/giu,
   /<\/?[A-Za-z][^>]*>/gu
 ] as const;
+const INLINE_MATH_PATTERN = /(^|[^\\$])(\$(?!\$)[^\n$]+\$)/gmu;
 
 export function isInsideWikilink(
   documentText: string,
   start: number,
   end: number
 ): boolean {
-  return rangesFromPattern(documentText, INLINE_PATTERNS[0])
+  return rangesFromPattern(documentText, WIKILINK_PATTERN)
     .some((range) => overlaps(range, start, end));
 }
 
@@ -36,11 +37,24 @@ export function isProtectedAnchor(
   if (isInsideFence(documentText, start)) {
     return true;
   }
-
-  return INLINE_PATTERNS.some((pattern, index) => {
-    const prefixLength = index === 5 ? 1 : 0;
-    return rangesFromPattern(documentText, pattern, prefixLength)
+  if (PROTECTED_PATTERNS.some((pattern) => {
+    return rangesFromPattern(documentText, pattern)
       .some((range) => overlaps(range, start, end));
+  })) {
+    return true;
+  }
+
+  return [...documentText.matchAll(INLINE_MATH_PATTERN)].some((match) => {
+    const math = match[2];
+    if (math === undefined) {
+      return false;
+    }
+    const rangeStart = match.index + match[0].length - math.length;
+    return overlaps(
+      { start: rangeStart, end: rangeStart + math.length },
+      start,
+      end
+    );
   });
 }
 
@@ -69,11 +83,7 @@ function isInsideFence(documentText: string, position: number): boolean {
 
     const line = match[0].replace(/\n$/u, "");
     const marker = /^[\t ]{0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
-    if (marker === null) {
-      continue;
-    }
-
-    const run = marker[1];
+    const run = marker?.[1];
     if (run === undefined) {
       continue;
     }
@@ -90,7 +100,7 @@ function isInsideFence(documentText: string, position: number): boolean {
     if (
       run[0] === fenceCharacter
       && run.length >= fenceLength
-      && (marker[2] ?? "").trim().length === 0
+      && (marker?.[2] ?? "").trim().length === 0
     ) {
       if (position < lineStart + match[0].length) {
         return true;
@@ -103,13 +113,9 @@ function isInsideFence(documentText: string, position: number): boolean {
   return fenceCharacter !== null;
 }
 
-function rangesFromPattern(
-  documentText: string,
-  pattern: RegExp,
-  prefixLength = 0
-): TextRange[] {
+function rangesFromPattern(documentText: string, pattern: RegExp): TextRange[] {
   return [...documentText.matchAll(pattern)].map((match) => ({
-    start: match.index + prefixLength,
+    start: match.index,
     end: match.index + match[0].length
   }));
 }

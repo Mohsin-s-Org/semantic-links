@@ -94,6 +94,7 @@ test("round-trips validated documents, chunks and row-major vectors", async () =
   assert.equal(opened.documents[0]?.path, "Notes/first.md");
   assert.equal(opened.chunks[0]?.vectorRow, 0);
   assert.deepEqual([...opened.vectors], [0.25, 0.75]);
+  assert.equal(await adapter.exists("plugin/index/journal.json"), false);
 });
 
 test("restores the last validated generation after an interrupted write", async () => {
@@ -105,8 +106,7 @@ test("restores the last validated generation after an interrupted write", async 
     "manifest.json",
     "documents.json",
     "chunks.json",
-    "vectors.f32",
-    "journal.json"
+    "vectors.f32"
   ]) {
     await adapter.copy(`plugin/index/${name}`, `plugin/index/${name}.previous`);
   }
@@ -124,6 +124,24 @@ test("restores the last validated generation after an interrupted write", async 
   assert.equal(recovered.documents[0]?.path, "Notes/stable.md");
   assert.equal(await adapter.exists("plugin/index/documents.json.next"), false);
   assert.equal(await adapter.exists("plugin/index/manifest.json.previous"), false);
+});
+
+test("rejects duplicate vector rows before writing", async () => {
+  const adapter = new MemoryAdapter();
+  const snapshot = createSnapshot(1, "invalid");
+  const original = snapshot.chunks[0];
+  assert.ok(original !== undefined);
+  const duplicateId = `${original.id}-duplicate`;
+  snapshot.chunks.push({
+    ...original,
+    id: duplicateId
+  });
+  snapshot.documents[0]?.chunkIds.push(duplicateId);
+
+  await assert.rejects(
+    createStore(adapter).write(snapshot),
+    /reuse vector row/u
+  );
 });
 
 function createStore(adapter: MemoryAdapter): PersistentIndexStore {

@@ -14,7 +14,9 @@ export const DEFAULT_SETTINGS: Readonly<SemanticLinksSettings> = Object.freeze({
   maxSuggestions: DEFAULT_MAX_SUGGESTIONS,
   minimumConfidence: 0.55,
   excludedFolders: [],
+  excludedFiles: [],
   excludedTags: [],
+  excludedProperties: [],
   linkPathMode: "shortest"
 });
 
@@ -22,6 +24,8 @@ export function createDefaultSettings(): SemanticLinksSettings {
   return {
     ...DEFAULT_SETTINGS,
     excludedFolders: [],
-    excludedTags: []
+    excludedFiles: [],
+    excludedTags: [],
+    excludedProperties: []
   };
 }

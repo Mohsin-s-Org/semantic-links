@@ -16,6 +16,7 @@ export class LocalModelManager {
   private readonly queryCache = new Map<string, Float32Array>();
   private clientValue: LocalEmbeddingClient | null = null;
   private loading: Promise<LocalEmbeddingClient> | null = null;
+  private loadingController: AbortController | null = null;
   private statusValue: ModelStatus = {
     state: "not-installed",
     message: "The local semantic model is not installed.",
@@ -67,7 +68,12 @@ export class LocalModelManager {
     return new Float32Array(vector);
   }
 
+  cancelLoading(): void {
+    this.loadingController?.abort();
+  }
+
   unload(): void {
+    this.cancelLoading();
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
@@ -79,6 +85,7 @@ export class LocalModelManager {
   }
 
   async remove(): Promise<void> {
+    this.cancelLoading();
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
@@ -91,6 +98,7 @@ export class LocalModelManager {
   }
 
   dispose(): void {
+    this.cancelLoading();
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
@@ -104,16 +112,22 @@ export class LocalModelManager {
     if (this.loading !== null) {
       return this.loading;
     }
-    const loading = this.loadOnce(allowDownload).finally(() => {
+    const controller = new AbortController();
+    this.loadingController = controller;
+    const loading = this.loadOnce(allowDownload, controller.signal).finally(() => {
       if (this.loading === loading) {
         this.loading = null;
+        this.loadingController = null;
       }
     });
     this.loading = loading;
     return loading;
   }
 
-  private async loadOnce(allowDownload: boolean): Promise<LocalEmbeddingClient> {
+  private async loadOnce(
+    allowDownload: boolean,
+    signal: AbortSignal
+  ): Promise<LocalEmbeddingClient> {
     this.update({
       state: "loading",
       message: allowDownload ? "Downloading and verifying the local semantic model." : "Loading the cached semantic model.",
@@ -123,7 +137,15 @@ export class LocalModelManager {
       this.update({ state: "loading", message, percent });
     };
     try {
-      const client = await LocalEmbeddingClient.create(allowDownload, onProgress);
+      const client = await LocalEmbeddingClient.create(
+        allowDownload,
+        signal,
+        onProgress
+      );
+      if (signal.aborted) {
+        client.dispose();
+        throw abortError(signal);
+      }
       this.clientValue = client;
       this.update({ state: "ready", message: "Local semantic matching is ready.", percent: 100 });
       return client;
@@ -152,4 +174,10 @@ async function deleteModelCache(): Promise<void> {
   if ("caches" in globalThis) {
     await globalThis.caches.delete(LOCAL_MODEL_CACHE_KEY);
   }
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The model setup was cancelled.", "AbortError");
 }

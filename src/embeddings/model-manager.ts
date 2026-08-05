@@ -15,6 +15,7 @@ export class LocalModelManager {
   private readonly listeners = new Set<StatusListener>();
   private readonly queryCache = new Map<string, Float32Array>();
   private clientValue: LocalEmbeddingClient | null = null;
+  private loading: Promise<LocalEmbeddingClient> | null = null;
   private statusValue: ModelStatus = {
     state: "not-installed",
     message: "The local semantic model is not installed.",
@@ -35,11 +36,11 @@ export class LocalModelManager {
     return () => this.listeners.delete(listener);
   }
 
-  async loadCached(): Promise<LocalEmbeddingClient> {
+  loadCached(): Promise<LocalEmbeddingClient> {
     return this.load(false);
   }
 
-  async download(): Promise<LocalEmbeddingClient> {
+  download(): Promise<LocalEmbeddingClient> {
     return this.load(true);
   }
 
@@ -96,10 +97,23 @@ export class LocalModelManager {
     this.listeners.clear();
   }
 
-  private async load(allowDownload: boolean): Promise<LocalEmbeddingClient> {
+  private load(allowDownload: boolean): Promise<LocalEmbeddingClient> {
     if (this.clientValue !== null) {
-      return this.clientValue;
+      return Promise.resolve(this.clientValue);
     }
+    if (this.loading !== null) {
+      return this.loading;
+    }
+    const loading = this.loadOnce(allowDownload).finally(() => {
+      if (this.loading === loading) {
+        this.loading = null;
+      }
+    });
+    this.loading = loading;
+    return loading;
+  }
+
+  private async loadOnce(allowDownload: boolean): Promise<LocalEmbeddingClient> {
     this.update({
       state: "loading",
       message: allowDownload ? "Downloading and verifying the local semantic model." : "Loading the cached semantic model.",

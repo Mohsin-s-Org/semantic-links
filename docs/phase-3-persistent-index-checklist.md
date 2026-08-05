@@ -2,10 +2,12 @@
 
 ## Markdown processing
 
-- [x] Split notes by heading sections and prose blocks
+- [x] Split notes by ATX or Setext heading sections and prose blocks
+- [x] Preserve sparse heading hierarchies without empty breadcrumb levels
 - [x] Merge small non-overlapping blocks under the same heading
 - [x] Split oversized prose at sentence boundaries with one-sentence overlap
 - [x] Enforce the configured maximum even when an overlap sentence is large
+- [x] Accept valid closing code fences that are longer than their opener
 - [x] Preserve source offsets and line numbers
 - [x] Include the note title and heading breadcrumb in embedding text
 - [x] Exclude frontmatter, code, Dataview fences, math, comments, raw HTML blocks, embeds, URLs and existing links
@@ -54,6 +56,7 @@
 ## Verification
 
 - [x] Unit tests cover protected-content chunking, raw HTML exclusion and sentence overlap
+- [x] Unit tests cover ATX and Setext breadcrumbs plus valid longer closing fences
 - [x] Unit tests cover uneven sentence lengths and hard maximum passage size
 - [x] Unit tests cover bounded embedding batches and malformed vectors
 - [x] Unit tests cover unchanged mtime, document hash and passage-level reuse
@@ -61,7 +64,6 @@
 - [x] Unit tests cover property-value rule normalization
 - [x] Unit tests cover persistent vector round trips and relationship validation
 - [x] Unit tests simulate startup recovery from a dirty interrupted generation
-- [x] CI run #126 passes the complete repository pipeline on the audited head
 - [ ] Complete a manual Obsidian desktop walkthrough before release
 
 ## Model boundary

@@ -52,8 +52,16 @@ export function chunkMarkdown(
 ): MarkdownChunk[] {
   const resolved = validateOptions({ ...DEFAULT_OPTIONS, ...options });
   const blocks = splitIntoBlocks(markdown)
-    .flatMap((block) => splitOversizedBlock(block, resolved.maximumWords, resolved.targetWords));
-  const merged = mergeSmallBlocks(blocks, resolved.minimumWords, resolved.targetWords, resolved.maximumWords);
+    .flatMap((block) => splitOversizedBlock(
+      block,
+      resolved.maximumWords,
+      resolved.targetWords
+    ));
+  const merged = mergeSmallBlocks(
+    blocks,
+    resolved.minimumWords,
+    resolved.maximumWords
+  );
 
   return merged.flatMap((block) => {
     const text = stripMarkdownForLexicalIndex(block.rawText);
@@ -136,7 +144,10 @@ function splitIntoBlocks(markdown: string): SourceBlock[] {
     if (fence !== null) {
       if (
         (fence === "math" && /^\s*\$\$\s*$/u.test(line.text))
-        || (fence === "code" && new RegExp(`^\\s{0,3}${escapeRegExp(fenceMarker)}\\s*$`, "u").test(line.text))
+        || (fence === "code" && new RegExp(
+          `^\\s{0,3}${escapeRegExp(fenceMarker)}\\s*$`,
+          "u"
+        ).test(line.text))
       ) {
         fence = null;
         fenceMarker = "";
@@ -196,46 +207,60 @@ function splitOversizedBlock(
   const chunks: SourceBlock[] = [];
   let current: SourceBlock[] = [];
   let currentWords = 0;
+
   for (const sentence of sentences) {
     const sentenceWords = wordCount(sentence.rawText);
     if (sentenceWords > maximumWords) {
-      if (current.length > 0) {
-        chunks.push(joinBlocks(current));
-        current = [];
-        currentWords = 0;
-      }
+      pushAdvancedChunk(chunks, current);
+      current = [];
+      currentWords = 0;
       chunks.push(...splitByWords(sentence, maximumWords));
       continue;
     }
+
     if (current.length > 0 && currentWords + sentenceWords > maximumWords) {
-      const previousSentence = current.at(-1);
-      chunks.push(joinBlocks(current));
-      current = previousSentence === undefined ? [] : [previousSentence];
-      currentWords = previousSentence === undefined ? 0 : wordCount(previousSentence.rawText);
+      const overlap = current.at(-1);
+      pushAdvancedChunk(chunks, current);
+      const overlapWords = overlap === undefined ? 0 : wordCount(overlap.rawText);
+      if (overlap !== undefined && overlapWords + sentenceWords <= maximumWords) {
+        current = [overlap];
+        currentWords = overlapWords;
+      } else {
+        current = [];
+        currentWords = 0;
+      }
     }
+
     current.push(sentence);
     currentWords += sentenceWords;
     if (currentWords >= targetWords) {
+      pushAdvancedChunk(chunks, current);
       const overlap = current.at(-1);
-      chunks.push(joinBlocks(current));
       current = overlap === undefined ? [] : [overlap];
       currentWords = overlap === undefined ? 0 : wordCount(overlap.rawText);
     }
   }
-  if (current.length > 0) {
-    const joined = joinBlocks(current);
-    const previous = chunks.at(-1);
-    if (previous === undefined || joined.startOffset !== previous.startOffset || joined.endOffset !== previous.endOffset) {
-      chunks.push(joined);
-    }
-  }
+
+  pushAdvancedChunk(chunks, current);
   return chunks;
+}
+
+function pushAdvancedChunk(
+  chunks: SourceBlock[],
+  blocks: readonly SourceBlock[]
+): void {
+  if (blocks.length === 0) {
+    return;
+  }
+  const joined = joinBlocks(blocks);
+  if (chunks.at(-1)?.endOffset !== joined.endOffset) {
+    chunks.push(joined);
+  }
 }
 
 function mergeSmallBlocks(
   blocks: SourceBlock[],
   minimumWords: number,
-  targetWords: number,
   maximumWords: number
 ): SourceBlock[] {
   const merged: SourceBlock[] = [];
@@ -243,14 +268,16 @@ function mergeSmallBlocks(
     const previous = merged.at(-1);
     if (
       previous !== undefined
+      && previous.endOffset <= block.startOffset
       && arraysEqual(previous.headingPath, block.headingPath)
-      && (wordCount(previous.rawText) < minimumWords || wordCount(block.rawText) < minimumWords)
+      && (wordCount(previous.rawText) < minimumWords
+        || wordCount(block.rawText) < minimumWords)
       && wordCount(`${previous.rawText}\n${block.rawText}`) <= maximumWords
     ) {
       merged[merged.length - 1] = joinBlocks([previous, block]);
-      continue;
+    } else {
+      merged.push(block);
     }
-    merged.push(block);
   }
 
   for (let index = merged.length - 1; index > 0; index -= 1) {
@@ -259,9 +286,10 @@ function mergeSmallBlocks(
     if (
       block !== undefined
       && previous !== undefined
+      && previous.endOffset <= block.startOffset
       && wordCount(block.rawText) < minimumWords
       && arraysEqual(previous.headingPath, block.headingPath)
-      && wordCount(`${previous.rawText}\n${block.rawText}`) <= Math.max(targetWords, maximumWords)
+      && wordCount(`${previous.rawText}\n${block.rawText}`) <= maximumWords
     ) {
       merged[index - 1] = joinBlocks([previous, block]);
       merged.splice(index, 1);
@@ -280,14 +308,14 @@ function sentenceSegments(block: SourceBlock): SourceBlock[] {
     }
     const relativeStart = match.index;
     const relativeEnd = relativeStart + text.length;
-    const startOffset = block.startOffset + relativeStart;
-    const endOffset = block.startOffset + relativeEnd;
     segments.push({
       headingPath: block.headingPath,
-      startOffset,
-      endOffset,
-      startLine: block.startLine + countNewlines(block.rawText.slice(0, relativeStart)),
-      endLine: block.startLine + countNewlines(block.rawText.slice(0, relativeEnd)),
+      startOffset: block.startOffset + relativeStart,
+      endOffset: block.startOffset + relativeEnd,
+      startLine: block.startLine
+        + countNewlines(block.rawText.slice(0, relativeStart)),
+      endLine: block.startLine
+        + countNewlines(block.rawText.slice(0, relativeEnd)),
       rawText: text
     });
   }
@@ -312,8 +340,10 @@ function splitByWords(block: SourceBlock, maximumWords: number): SourceBlock[] {
       headingPath: block.headingPath,
       startOffset: block.startOffset + relativeStart,
       endOffset: block.startOffset + relativeEnd,
-      startLine: block.startLine + countNewlines(block.rawText.slice(0, relativeStart)),
-      endLine: block.startLine + countNewlines(block.rawText.slice(0, relativeEnd)),
+      startLine: block.startLine
+        + countNewlines(block.rawText.slice(0, relativeStart)),
+      endLine: block.startLine
+        + countNewlines(block.rawText.slice(0, relativeEnd)),
       rawText: block.rawText.slice(relativeStart, relativeEnd)
     });
   }
@@ -378,7 +408,8 @@ function countNewlines(value: string): number {
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  return left.length === right.length
+    && left.every((value, index) => value === right[index]);
 }
 
 function escapeRegExp(value: string): string {

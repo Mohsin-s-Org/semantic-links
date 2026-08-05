@@ -67,7 +67,9 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       .join("\n")
       .slice(0, 1_200);
     const vector = await this.modelManager.embedQuery(query, signal);
-    return vector === null ? [] : manager.searchSemantic(vector, sourcePath, 40);
+    return vector === null
+      ? []
+      : manager.searchSemantic(vector, sourcePath, 40, signal);
   }
 
   openModelSetup(): void {
@@ -139,10 +141,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   }
 
   private async waitForIndexManager(): Promise<typeof this.indexManager> {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (this.semanticLifecycle.signal.aborted) {
-        return null;
-      }
+    while (!this.semanticLifecycle.signal.aborted) {
       if (this.indexManager !== null) {
         return this.indexManager;
       }

@@ -7,6 +7,7 @@ export interface SuggestionRequestKey {
   documentVersion: number;
   anchorStart: number;
   anchorEnd: number;
+  anchorText: string;
   contextHash: string;
   mode: SuggestionMode;
 }
@@ -27,16 +28,10 @@ export function serializeRequestKey(key: SuggestionRequestKey): string {
     key.documentVersion,
     key.anchorStart,
     key.anchorEnd,
+    key.anchorText,
     key.contextHash,
     key.mode
   ]);
-}
-
-export function requestKeysEqual(
-  left: SuggestionRequestKey,
-  right: SuggestionRequestKey
-): boolean {
-  return serializeRequestKey(left) === serializeRequestKey(right);
 }
 
 export function isSuggestionRequestKey(value: unknown): value is SuggestionRequestKey {
@@ -44,14 +39,27 @@ export function isSuggestionRequestKey(value: unknown): value is SuggestionReque
     return false;
   }
 
+  const filePath = value["filePath"];
+  const documentVersion = value["documentVersion"];
+  const anchorStart = value["anchorStart"];
+  const anchorEnd = value["anchorEnd"];
+  const anchorText = value["anchorText"];
+  const contextHash = value["contextHash"];
   const mode = value["mode"];
-  return typeof value["filePath"] === "string"
-    && typeof value["documentVersion"] === "number"
-    && Number.isInteger(value["documentVersion"])
-    && typeof value["anchorStart"] === "number"
-    && Number.isInteger(value["anchorStart"])
-    && typeof value["anchorEnd"] === "number"
-    && Number.isInteger(value["anchorEnd"])
-    && typeof value["contextHash"] === "string"
+  return typeof filePath === "string"
+    && filePath.length > 0
+    && typeof documentVersion === "number"
+    && Number.isInteger(documentVersion)
+    && documentVersion >= 0
+    && typeof anchorStart === "number"
+    && Number.isInteger(anchorStart)
+    && anchorStart >= 0
+    && typeof anchorEnd === "number"
+    && Number.isInteger(anchorEnd)
+    && anchorEnd > anchorStart
+    && typeof anchorText === "string"
+    && anchorText.length === anchorEnd - anchorStart
+    && typeof contextHash === "string"
+    && contextHash.length > 0
     && (mode === "automatic" || mode === "manual");
 }

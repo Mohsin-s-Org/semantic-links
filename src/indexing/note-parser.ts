@@ -44,7 +44,7 @@ export async function parseIndexDocument(
     const documentId = createDocumentId(file.path);
     const drafts = chunkMarkdown(content, title);
     const chunks: IndexedChunk[] = drafts.map((draft) => ({
-      id: createChunkId(documentId, draft.startOffset, draft.endOffset, draft.text),
+      id: createChunkId(documentId, draft.startOffset, draft.endOffset, draft.embeddingText),
       documentId,
       headingPath: draft.headingPath,
       startOffset: draft.startOffset,

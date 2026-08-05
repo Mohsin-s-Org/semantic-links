@@ -46,6 +46,7 @@ export function createControllerExtension(
         registry.setActive(update.view);
       } else if (update.focusChanged) {
         registry.clearActive(update.view);
+        this.controller.invalidate();
       }
 
       if (!isContextChange(update)) {

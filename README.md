@@ -1,34 +1,34 @@
 # Semantic Links for Obsidian
 
-A privacy-first Obsidian plugin that suggests meaningful internal links while you write, including links where the wording differs but the underlying meaning is related.
+A privacy-first Obsidian plugin that suggests meaningful internal links while you write. Links are inserted only after explicit confirmation.
 
-Phase 1 implements the production foundation only. Semantic models, vault indexing and ranking are deliberately not included yet.
+Phase 1 implements the production foundation only. Semantic models, vault indexing, and ranking are deliberately excluded.
 
 ## Phase 1 capabilities
 
-- Strict TypeScript using the published `obsidian` package
-- Versioned settings loaded defensively from `unknown`
-- Searchable Obsidian 1.13 settings definitions and heading APIs
-- One cancellable request controller per CodeMirror editor view
-- Stable request keys, duplicate suppression and stale-result rejection
-- IME, plugin-transaction and undo/redo suppression
-- Explicit mock suggestion chooser for testing the acceptance path
-- Verified wikilink insertion in one CodeMirror transaction
-- Lifecycle cleanup for timers, requests, controllers and placeholder services
-- Unit, integration, policy, build and clean-vault checks
-- Exact three-file release staging with separate provenance attestations
+- Strict TypeScript with the official Obsidian 1.13 API types
+- Versioned settings validated from `unknown`
+- Searchable declarative settings with one source of truth
+- One cancellable request controller per CodeMirror editor
+- Request deduplication and immediate stale-work cancellation
+- Document, cursor, focus, IME, plugin-transaction, and Undo/redo handling
+- Explicit mock note chooser for exercising the acceptance path
+- Revalidated wikilink insertion in one CodeMirror transaction
+- Protection against stale-file acceptance and nested wikilinks
+- Unit, integration, policy, build, reproducibility, and packaging checks
+- Exact three-file releases with separate provenance attestations
 
-The mock chooser lists eligible Markdown notes so the insertion and Undo path can be exercised. It is not the final lexical or semantic suggestion engine.
+The mock chooser is not the final lexical or semantic suggestion engine.
 
 ## Example
 
-Typing:
+Explicitly accepting `Plant transpiration` can change:
 
 ```markdown
 Plants lose water through their leaves during transpiration.
 ```
 
-and explicitly accepting `Plant transpiration` creates one undoable editor transaction:
+to one undoable edit:
 
 ```markdown
 Plants lose [[Plant transpiration|water]] through their leaves during transpiration.
@@ -46,6 +46,7 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run verify:reproducible-build
 npm run ci
 ```
 
@@ -61,22 +62,22 @@ manifest.json
 styles.css
 ```
 
-No ZIP, model, WASM or checksum assets are attached. Release tags are the exact manifest version without a `v` prefix, and each supported asset receives its own GitHub build-provenance attestation.
+No ZIP, model, WASM, checksum, or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
 
 ## Planning documents
 
-- [Master plan](semantic-links-master-plan.md) — product architecture, indexing, retrieval, ranking, storage, testing and delivery phases
-- [Master plan addendum](docs/master-plan-addendum.md) — authoritative implementation and release updates
-- [Obsidian implementation guardrails](docs/obsidian-implementation-guardrails.md) — typing, settings, editor lifecycle, undo, async safety, network and release constraints
-- [Phase 1 foundation checklist](docs/phase-1-foundation-checklist.md) — scaffold and exit criteria implemented by this phase
-- [Community Plugins release checklist](docs/community-plugin-release-checklist.md) — source review, CI, release assets, provenance and manual verification
+- [Master plan](semantic-links-master-plan.md)
+- [Master plan addendum](docs/master-plan-addendum.md)
+- [Obsidian implementation guardrails](docs/obsidian-implementation-guardrails.md)
+- [Phase 1 foundation checklist](docs/phase-1-foundation-checklist.md)
+- [Community Plugins release checklist](docs/community-plugin-release-checklist.md)
 
 The addendum and guardrails are authoritative where they conflict with older implementation details in the original master plan.
 
 ## Privacy target
 
-Vault content, filenames, links, tags, embeddings and index records remain on the device in the default implementation. Network access will be limited to explicit model or runtime downloads approved by the user in a later phase.
+Vault content, filenames, links, tags, embeddings, and index records remain on the device in the default implementation. Future model or runtime downloads require explicit approval.
 
 ## Status
 
-Phase 1 foundation implemented. The next milestone is the local embedding-runtime feasibility spike, followed by the lexical vault index and real suggestions.
+Phase 1 foundation implemented. A manual Obsidian desktop walkthrough remains required before release. The next milestone is the local runtime feasibility spike, followed by the lexical vault index and real suggestions.

@@ -48,6 +48,34 @@ test("chunks by headings while excluding protected Markdown", () => {
   assert.ok((chunks[0]?.startLine ?? 0) >= 5);
 });
 
+test("recognizes Setext sections and longer closing fences", () => {
+  const chunks = chunkMarkdown([
+    "Water cycle",
+    "===========",
+    "Visible water movement appears in this section.",
+    "",
+    "```js",
+    "hiddenCode();",
+    "````",
+    "",
+    "Evaporation",
+    "-----------",
+    "Visible vapour movement appears in this subsection."
+  ].join("\n"), "Hydrology", {
+    minimumWords: 1,
+    targetWords: 20,
+    maximumWords: 40
+  });
+
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(chunks[0]?.headingPath, ["Water cycle"]);
+  assert.deepEqual(chunks[1]?.headingPath, ["Water cycle", "Evaporation"]);
+  assert.equal(
+    chunks.some((chunk) => chunk.embeddingText.includes("hiddenCode")),
+    false
+  );
+});
+
 test("splits oversized prose at sentence boundaries with one-sentence overlap", () => {
   const sentences = Array.from({ length: 10 }, (_, index) => {
     return `Sentence ${index + 1} contains several meaningful words about plants water sunlight and growth.`;

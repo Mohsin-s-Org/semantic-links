@@ -19,12 +19,9 @@ export class EditorControllerRegistry {
   }
 
   unregister(view: EditorView): void {
-    const controller = this.controllers.get(view);
-    controller?.dispose();
+    this.controllers.get(view)?.dispose();
     this.controllers.delete(view);
-    if (this.activeView === view) {
-      this.activeView = null;
-    }
+    this.clearActive(view);
   }
 
   setActive(view: EditorView): void {
@@ -33,8 +30,14 @@ export class EditorControllerRegistry {
     }
   }
 
+  clearActive(view?: EditorView): void {
+    if (view === undefined || this.activeView === view) {
+      this.activeView = null;
+    }
+  }
+
   getActive(): ActiveEditorController | null {
-    if (this.activeView === null) {
+    if (this.activeView === null || !this.activeView.hasFocus) {
       return null;
     }
 

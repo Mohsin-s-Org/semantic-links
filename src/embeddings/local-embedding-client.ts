@@ -35,9 +35,11 @@ export class LocalEmbeddingClient implements EmbeddingClient {
 
   static async create(
     allowDownload: boolean,
+    signal: AbortSignal,
     onProgress?: ModelProgressListener
   ): Promise<LocalEmbeddingClient> {
-    configureEnvironment(allowDownload);
+    throwIfUnavailable(false, signal);
+    configureEnvironment(allowDownload, signal);
     onProgress?.(
       allowDownload ? "Preparing the verified local semantic model." : "Loading the cached semantic model.",
       null
@@ -48,8 +50,12 @@ export class LocalEmbeddingClient implements EmbeddingClient {
       local_files_only: !allowDownload,
       progress_callback: (event) => reportProgress(event, onProgress)
     });
+    if (signal.aborted) {
+      await Promise.resolve(extractor.dispose()).catch(() => undefined);
+      throwIfUnavailable(false, signal);
+    }
     const client = new LocalEmbeddingClient(extractor);
-    await client.embedQuery("warm up local semantic matching", new AbortController().signal);
+    await client.embedQuery("warm up local semantic matching", signal);
     onProgress?.("The local semantic model is ready.", 100);
     return client;
   }
@@ -98,7 +104,10 @@ export class LocalEmbeddingClient implements EmbeddingClient {
   }
 }
 
-function configureEnvironment(allowDownload: boolean): void {
+function configureEnvironment(
+  allowDownload: boolean,
+  signal: AbortSignal
+): void {
   if (!("caches" in globalThis)) {
     throw new Error("Obsidian's local cache API is unavailable, so the semantic model cannot be stored safely.");
   }
@@ -110,7 +119,7 @@ function configureEnvironment(allowDownload: boolean): void {
   env.useWasmCache = true;
   env.cacheKey = LOCAL_MODEL_CACHE_KEY;
   env.logLevel = LogLevel.ERROR;
-  env.fetch = createVerifiedFetch();
+  env.fetch = createVerifiedFetch(signal);
   const wasm = env.backends.onnx.wasm ?? {};
   wasm.proxy = true;
   wasm.simd = true;

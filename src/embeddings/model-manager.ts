@@ -70,9 +70,7 @@ export class LocalModelManager {
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
-    if ("caches" in globalThis) {
-      await globalThis.caches.delete(LOCAL_MODEL_CACHE_KEY);
-    }
+    await deleteModelCache();
     this.update({
       state: "not-installed",
       message: "The local semantic model was removed.",
@@ -93,7 +91,7 @@ export class LocalModelManager {
     }
     this.update({
       state: "loading",
-      message: allowDownload ? "Downloading the local semantic model." : "Loading the cached semantic model.",
+      message: allowDownload ? "Downloading and verifying the local semantic model." : "Loading the cached semantic model.",
       percent: null
     });
     const onProgress: ModelProgressListener = (message, percent) => {
@@ -105,6 +103,9 @@ export class LocalModelManager {
       this.update({ state: "ready", message: "Local semantic matching is ready.", percent: 100 });
       return client;
     } catch (error) {
+      if (allowDownload) {
+        await deleteModelCache();
+      }
       this.update({
         state: "error",
         message: error instanceof Error ? error.message : "The local semantic model could not be loaded.",
@@ -119,5 +120,11 @@ export class LocalModelManager {
     for (const listener of this.listeners) {
       listener(this.status);
     }
+  }
+}
+
+async function deleteModelCache(): Promise<void> {
+  if ("caches" in globalThis) {
+    await globalThis.caches.delete(LOCAL_MODEL_CACHE_KEY);
   }
 }

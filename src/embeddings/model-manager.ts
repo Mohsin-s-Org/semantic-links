@@ -69,7 +69,17 @@ export class LocalModelManager {
   }
 
   cancelLoading(): void {
-    this.loadingController?.abort();
+    if (this.loadingController === null) {
+      return;
+    }
+    this.loadingController.abort();
+    if (this.statusValue.state === "loading") {
+      this.update({
+        state: this.clientValue === null ? "not-installed" : "ready",
+        message: "Model setup was cancelled.",
+        percent: null
+      });
+    }
   }
 
   unload(): void {
@@ -153,11 +163,13 @@ export class LocalModelManager {
       if (allowDownload) {
         await deleteModelCache();
       }
-      this.update({
-        state: "error",
-        message: error instanceof Error ? error.message : "The local semantic model could not be loaded.",
-        percent: null
-      });
+      if (!signal.aborted) {
+        this.update({
+          state: "error",
+          message: error instanceof Error ? error.message : "The local semantic model could not be loaded.",
+          percent: null
+        });
+      }
       throw error;
     }
   }

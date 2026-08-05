@@ -20,8 +20,6 @@ import {
 
 export interface SuggestionPopupState {
   requestKey: SuggestionRequestKey;
-  anchorStart: number;
-  anchorEnd: number;
   suggestions: readonly LexicalSuggestion[];
   selectedIndex: number;
   keyboardActive: boolean;
@@ -138,8 +136,8 @@ function createPopupTooltip(
   handler: SuggestionPopupHandler
 ): Tooltip {
   return {
-    pos: popup.anchorEnd,
-    end: popup.anchorEnd,
+    pos: popup.requestKey.anchorEnd,
+    end: popup.requestKey.anchorEnd,
     arrow: true,
     create: (view) => {
       const dom = document.createElement("div");
@@ -243,21 +241,16 @@ function dismissPopup(view: EditorView): boolean {
 }
 
 function normalizePopup(value: SuggestionPopupState): SuggestionPopupState | null {
-  if (value.suggestions.length === 0) {
-    return null;
-  }
-  return {
-    ...value,
-    suggestions: value.suggestions,
-    selectedIndex: wrapIndex(value.selectedIndex, value.suggestions.length)
-  };
+  return value.suggestions.length === 0
+    ? null
+    : {
+        ...value,
+        selectedIndex: wrapIndex(value.selectedIndex, value.suggestions.length)
+      };
 }
 
 function wrapIndex(index: number, length: number): number {
-  if (length <= 0) {
-    return 0;
-  }
-  return ((index % length) + length) % length;
+  return length <= 0 ? 0 : ((index % length) + length) % length;
 }
 
 function formatKinds(kinds: readonly LexicalMatchKind[]): string {

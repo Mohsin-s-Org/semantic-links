@@ -26,11 +26,19 @@ const DATA_FILES = ["documents.json", "chunks.json", "vectors.f32", "journal.jso
 const ALL_FILES = [...TEXT_FILES, "vectors.f32"] as const;
 
 export class PersistentIndexStore {
+  private readonly adapter: IndexStorageAdapter;
+  private readonly rootPath: string;
+  private readonly createEmptyManifest: () => IndexManifest;
+
   constructor(
-    private readonly adapter: IndexStorageAdapter,
-    private readonly rootPath: string,
-    private readonly createEmptyManifest: () => IndexManifest
-  ) {}
+    adapter: IndexStorageAdapter,
+    rootPath: string,
+    createEmptyManifest: () => IndexManifest
+  ) {
+    this.adapter = adapter;
+    this.rootPath = rootPath;
+    this.createEmptyManifest = createEmptyManifest;
+  }
 
   async open(): Promise<IndexSnapshot> {
     await this.ensureDirectory();

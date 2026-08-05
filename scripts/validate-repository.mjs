@@ -24,6 +24,13 @@ const requiredFiles = [
   "src/lexical/text.ts",
   "src/lexical/types.ts",
   "src/lexical/vault-index.ts",
+  "src/indexing/chunker.ts",
+  "src/indexing/embedding-batcher.ts",
+  "src/indexing/index-manager.ts",
+  "src/indexing/note-parser.ts",
+  "src/indexing/types.ts",
+  "src/storage/index-store.ts",
+  "src/views/index-status-view.ts",
   "src/types/obsidian-history-handler-fix.d.ts"
 ];
 for (const path of requiredFiles) {
@@ -45,6 +52,8 @@ const [
   tsconfig,
   constantsSource,
   mainSource,
+  parserSource,
+  storeSource,
   buildSource,
   ciWorkflow,
   releaseWorkflow
@@ -54,6 +63,8 @@ const [
   readJson("tsconfig.json"),
   readFile("src/constants.ts", "utf8"),
   readFile("src/main.ts", "utf8"),
+  readFile("src/indexing/note-parser.ts", "utf8"),
+  readFile("src/storage/index-store.ts", "utf8"),
   readFile("esbuild.config.mjs", "utf8"),
   readFile(".github/workflows/ci.yml", "utf8"),
   readFile(".github/workflows/release.yml", "utf8")
@@ -66,9 +77,16 @@ assert(packageJson.devDependencies?.obsidian === "1.13.1", "Use the official Obs
 assert(packageJson.scripts?.["verify:reproducible-build"] !== undefined, "A reproducible-build check must remain configured.");
 assert(tsconfig.compilerOptions?.strict === true, "Strict TypeScript must remain enabled.");
 assert(tsconfig.compilerOptions?.skipLibCheck === false, "Library type checking must not be skipped.");
-assert(constantsSource.includes('SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions"'), "The implemented command must use a short local id.");
-assert(mainSource.includes("new LexicalVaultIndex"), "Phase 2 must initialize the local lexical index.");
-assert(mainSource.includes("createSuggestionPopupExtension"), "Phase 2 must register the inline confirmation popup.");
+assert(constantsSource.includes('SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions"'), "Suggestion command must use a short local id.");
+assert(constantsSource.includes('SHOW_INDEX_STATUS_COMMAND_ID = "show-index-status"'), "Index status command must use a short local id.");
+assert(constantsSource.includes('REBUILD_INDEX_COMMAND_ID = "rebuild-index"'), "Rebuild command must use a short local id.");
+assert(constantsSource.includes('DELETE_INDEX_COMMAND_ID = "delete-index"'), "Delete command must use a short local id.");
+assert(mainSource.includes("new LexicalVaultIndex"), "The local lexical index must remain available.");
+assert(mainSource.includes("new PersistentIndexManager"), "Phase 3 must initialize the persistent index after layout readiness.");
+assert(mainSource.includes("createSuggestionPopupExtension"), "The inline confirmation popup must remain registered.");
+assert(parserSource.indexOf("isFileExcluded") < parserSource.indexOf("cachedRead"), "Excluded notes must be rejected before content is read.");
+assert(storeSource.includes("manifest.json.next"), "Persistent writes must stage a next manifest.");
+assert(storeSource.includes("manifest.json.previous"), "Persistent writes must retain a recoverable previous manifest.");
 assert(!buildSource.includes("--minify"), "The release bundle must remain readable for review.");
 assert(ciWorkflow.includes("npm run verify:reproducible-build"), "CI must compare two production builds.");
 assert(releaseWorkflow.includes("uses: actions/attest@"), "Releases must use the current GitHub attestation action.");

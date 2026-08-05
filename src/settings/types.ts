@@ -11,7 +11,9 @@ export interface SemanticLinksSettings {
   maxSuggestions: number;
   minimumConfidence: number;
   excludedFolders: string[];
+  excludedFiles: string[];
   excludedTags: string[];
+  excludedProperties: string[];
   linkPathMode: LinkPathMode;
 }
 

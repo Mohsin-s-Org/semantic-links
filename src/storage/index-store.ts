@@ -21,9 +21,8 @@ export interface IndexStorageAdapter {
   copy(oldPath: string, newPath: string): Promise<void>;
 }
 
-const TEXT_FILES = ["manifest.json", "documents.json", "chunks.json", "journal.json"] as const;
-const DATA_FILES = ["documents.json", "chunks.json", "vectors.f32", "journal.json"] as const;
-const ALL_FILES = [...TEXT_FILES, "vectors.f32"] as const;
+const DATA_FILES = ["documents.json", "chunks.json", "vectors.f32"] as const;
+const ALL_FILES = ["manifest.json", ...DATA_FILES] as const;
 
 export class PersistentIndexStore {
   private readonly adapter: IndexStorageAdapter;
@@ -47,7 +46,7 @@ export class PersistentIndexStore {
       return this.emptySnapshot();
     }
 
-    const snapshot = await this.readStableSnapshot();
+    const snapshot = await this.readSnapshot("");
     validateSnapshot(snapshot);
     return snapshot;
   }
@@ -58,16 +57,14 @@ export class PersistentIndexStore {
     await this.ensureDirectory();
     await this.backupStableGeneration();
 
-    const dirtyManifest: IndexManifest = {
+    await this.adapter.write(this.path("manifest.json"), serialize({
       ...clean.manifest,
       dirty: true
-    };
-    await this.adapter.write(this.path("manifest.json"), serialize(dirtyManifest));
+    }));
 
     try {
       await this.writeNextGeneration(clean);
-      const candidate = await this.readNextSnapshot();
-      validateSnapshot(candidate);
+      validateSnapshot(await this.readSnapshot(".next"));
       await this.promoteNextGeneration();
       await this.cleanupSuffix("previous");
       return clean;
@@ -84,32 +81,39 @@ export class PersistentIndexStore {
   }
 
   private async writeNextGeneration(snapshot: IndexSnapshot): Promise<void> {
-    await this.adapter.write(this.path("documents.json.next"), serialize(snapshot.documents));
-    await this.adapter.write(this.path("chunks.json.next"), serialize(snapshot.chunks));
-    await this.adapter.writeBinary(this.path("vectors.f32.next"), toArrayBuffer(snapshot.vectors));
-    await this.adapter.write(this.path("journal.json.next"), serialize({
-      generation: snapshot.manifest.generation,
-      completedAt: snapshot.manifest.lastCompletedAt,
-      documentCount: snapshot.documents.length,
-      chunkCount: snapshot.chunks.length,
-      vectorCount: snapshot.manifest.vectorCount
-    }));
-    await this.adapter.write(this.path("manifest.json.next"), serialize(snapshot.manifest));
+    await this.adapter.write(
+      this.path("documents.json.next"),
+      serialize(snapshot.documents)
+    );
+    await this.adapter.write(
+      this.path("chunks.json.next"),
+      serialize(snapshot.chunks)
+    );
+    await this.adapter.writeBinary(
+      this.path("vectors.f32.next"),
+      toArrayBuffer(snapshot.vectors)
+    );
+    await this.adapter.write(
+      this.path("manifest.json.next"),
+      serialize(snapshot.manifest)
+    );
   }
 
-  private async readStableSnapshot(): Promise<IndexSnapshot> {
-    return this.readSnapshot("");
-  }
-
-  private async readNextSnapshot(): Promise<IndexSnapshot> {
-    return this.readSnapshot(".next");
-  }
-
-  private async readSnapshot(suffix: "" | ".next" | ".previous"): Promise<IndexSnapshot> {
-    const manifest = parseManifest(await this.adapter.read(this.path(`manifest.json${suffix}`)));
-    const documents = parseDocuments(await this.adapter.read(this.path(`documents.json${suffix}`)));
-    const chunks = parseChunks(await this.adapter.read(this.path(`chunks.json${suffix}`)));
-    const vectors = readVectors(await this.adapter.readBinary(this.path(`vectors.f32${suffix}`)));
+  private async readSnapshot(
+    suffix: "" | ".next" | ".previous"
+  ): Promise<IndexSnapshot> {
+    const manifest = parseManifest(await this.adapter.read(
+      this.path(`manifest.json${suffix}`)
+    ));
+    const documents = parseDocuments(await this.adapter.read(
+      this.path(`documents.json${suffix}`)
+    ));
+    const chunks = parseChunks(await this.adapter.read(
+      this.path(`chunks.json${suffix}`)
+    ));
+    const vectors = readVectors(await this.adapter.readBinary(
+      this.path(`vectors.f32${suffix}`)
+    ));
     return { manifest, documents, chunks, vectors };
   }
 
@@ -127,7 +131,10 @@ export class PersistentIndexStore {
     for (const file of DATA_FILES) {
       await this.replace(this.path(`${file}.next`), this.path(file));
     }
-    await this.replace(this.path("manifest.json.next"), this.path("manifest.json"));
+    await this.replace(
+      this.path("manifest.json.next"),
+      this.path("manifest.json")
+    );
   }
 
   private async recoverInterruptedWrite(): Promise<void> {
@@ -153,8 +160,7 @@ export class PersistentIndexStore {
   }
 
   private async restorePreviousGeneration(): Promise<void> {
-    const previousManifest = this.path("manifest.json.previous");
-    if (await this.adapter.exists(previousManifest)) {
+    if (await this.adapter.exists(this.path("manifest.json.previous"))) {
       for (const file of ALL_FILES) {
         const previous = this.path(`${file}.previous`);
         if (await this.adapter.exists(previous)) {
@@ -229,8 +235,6 @@ export function createEmptyIndexManifest(
 }
 
 function normalizeSnapshot(snapshot: IndexSnapshot, dirty: boolean): IndexSnapshot {
-  const documents = [...snapshot.documents].sort((left, right) => left.path.localeCompare(right.path));
-  const chunks = [...snapshot.chunks].sort((left, right) => left.id.localeCompare(right.id));
   return {
     manifest: {
       ...snapshot.manifest,
@@ -239,8 +243,10 @@ function normalizeSnapshot(snapshot: IndexSnapshot, dirty: boolean): IndexSnapsh
         : snapshot.vectors.length / snapshot.manifest.dimensions,
       dirty
     },
-    documents,
-    chunks,
+    documents: [...snapshot.documents]
+      .sort((left, right) => left.path.localeCompare(right.path)),
+    chunks: [...snapshot.chunks]
+      .sort((left, right) => left.id.localeCompare(right.id)),
     vectors: new Float32Array(snapshot.vectors)
   };
 }
@@ -253,11 +259,29 @@ function validateSnapshot(snapshot: IndexSnapshot): void {
   if (manifest.dirty) {
     throw new Error("A dirty semantic index generation cannot be opened.");
   }
+  if (
+    manifest.pluginVersion.length === 0
+    || manifest.vaultFingerprint.length === 0
+    || manifest.scopeFingerprint.length === 0
+  ) {
+    throw new Error("Semantic index identity metadata is incomplete.");
+  }
   if (!Number.isInteger(manifest.dimensions) || manifest.dimensions < 0) {
     throw new Error("Semantic index dimensions are invalid.");
   }
   if (!Number.isInteger(manifest.vectorCount) || manifest.vectorCount < 0) {
     throw new Error("Semantic index vector count is invalid.");
+  }
+  if (manifest.model === null) {
+    if (manifest.dimensions !== 0) {
+      throw new Error("A vectorless semantic index declares dimensions.");
+    }
+  } else if (
+    !Number.isInteger(manifest.model.dimensions)
+    || manifest.model.dimensions < 1
+    || manifest.dimensions !== manifest.model.dimensions
+  ) {
+    throw new Error("Semantic model dimensions do not match the index.");
   }
   if (manifest.dimensions === 0) {
     if (manifest.vectorCount !== 0 || vectors.length !== 0) {
@@ -266,28 +290,75 @@ function validateSnapshot(snapshot: IndexSnapshot): void {
   } else if (vectors.length !== manifest.vectorCount * manifest.dimensions) {
     throw new Error("Semantic vector byte length does not match the manifest.");
   }
+  for (const value of vectors) {
+    if (!Number.isFinite(value)) {
+      throw new Error("Semantic vector data contains a non-finite value.");
+    }
+  }
 
-  const documentIds = new Set<string>();
-  const chunkIds = new Set<string>();
+  const documentsById = new Map<string, IndexedDocument>();
+  const documentPaths = new Set<string>();
   for (const document of documents) {
-    if (documentIds.has(document.id)) {
+    if (documentsById.has(document.id)) {
       throw new Error(`Duplicate semantic document id: ${document.id}`);
     }
-    documentIds.add(document.id);
+    if (documentPaths.has(document.path)) {
+      throw new Error(`Duplicate semantic document path: ${document.path}`);
+    }
+    documentsById.set(document.id, document);
+    documentPaths.add(document.path);
   }
+
+  const chunksById = new Map<string, IndexedChunk>();
+  const vectorRows = new Set<number>();
   for (const chunk of chunks) {
-    if (chunkIds.has(chunk.id) || !documentIds.has(chunk.documentId)) {
+    if (chunksById.has(chunk.id) || !documentsById.has(chunk.documentId)) {
       throw new Error(`Invalid semantic chunk: ${chunk.id}`);
+    }
+    if (
+      chunk.startOffset < 0
+      || chunk.endOffset < chunk.startOffset
+      || chunk.startLine < 1
+      || chunk.endLine < chunk.startLine
+    ) {
+      throw new Error(`Semantic chunk has an invalid source range: ${chunk.id}`);
     }
     if (chunk.vectorRow < -1 || chunk.vectorRow >= manifest.vectorCount) {
       throw new Error(`Semantic chunk has an invalid vector row: ${chunk.id}`);
     }
-    chunkIds.add(chunk.id);
-  }
-  for (const document of documents) {
-    if (document.chunkIds.some((id) => !chunkIds.has(id))) {
-      throw new Error(`Semantic document references a missing chunk: ${document.path}`);
+    if (chunk.vectorRow >= 0 && vectorRows.has(chunk.vectorRow)) {
+      throw new Error(`Semantic chunks reuse vector row ${chunk.vectorRow}.`);
     }
+    if (chunk.vectorRow >= 0) {
+      vectorRows.add(chunk.vectorRow);
+    }
+    chunksById.set(chunk.id, chunk);
+  }
+  if (vectorRows.size !== manifest.vectorCount) {
+    throw new Error("Semantic index contains unreferenced vector rows.");
+  }
+
+  const referencedChunks = new Set<string>();
+  for (const document of documents) {
+    const localIds = new Set<string>();
+    for (const id of document.chunkIds) {
+      const chunk = chunksById.get(id);
+      if (
+        chunk === undefined
+        || chunk.documentId !== document.id
+        || localIds.has(id)
+        || referencedChunks.has(id)
+      ) {
+        throw new Error(
+          `Semantic document references an invalid chunk: ${document.path}`
+        );
+      }
+      localIds.add(id);
+      referencedChunks.add(id);
+    }
+  }
+  if (referencedChunks.size !== chunks.length) {
+    throw new Error("Semantic index contains unreferenced chunks.");
   }
 }
 
@@ -296,13 +367,12 @@ function parseManifest(value: string): IndexManifest {
   if (!isRecord(input)) {
     throw new Error("Semantic index manifest is not an object.");
   }
-  const model = parseModel(input["model"]);
   return {
     schemaVersion: readInteger(input, "schemaVersion"),
     pluginVersion: readString(input, "pluginVersion"),
     vaultFingerprint: readString(input, "vaultFingerprint"),
     scopeFingerprint: readString(input, "scopeFingerprint"),
-    model,
+    model: parseModel(input["model"]),
     vectorCount: readInteger(input, "vectorCount"),
     dimensions: readInteger(input, "dimensions"),
     lastCompletedAt: readNullableNumber(input, "lastCompletedAt"),
@@ -316,7 +386,7 @@ function parseDocuments(value: string): IndexedDocument[] {
   if (!Array.isArray(input)) {
     throw new Error("Semantic documents file is not an array.");
   }
-  return input.map((entry) => parseDocument(entry));
+  return input.map(parseDocument);
 }
 
 function parseDocument(input: unknown): IndexedDocument {
@@ -395,13 +465,16 @@ function readVectors(buffer: ArrayBuffer): Float32Array {
   if (buffer.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
     throw new Error("Semantic vector file has an invalid byte length.");
   }
-  const copy = buffer.slice(0);
-  return new Float32Array(copy);
+  return new Float32Array(buffer.slice(0));
 }
 
 function toArrayBuffer(vectors: Float32Array): ArrayBuffer {
   const bytes = new Uint8Array(vectors.byteLength);
-  bytes.set(new Uint8Array(vectors.buffer, vectors.byteOffset, vectors.byteLength));
+  bytes.set(new Uint8Array(
+    vectors.buffer,
+    vectors.byteOffset,
+    vectors.byteLength
+  ));
   return bytes.buffer;
 }
 
@@ -441,7 +514,10 @@ function readInteger(record: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function readNullableNumber(record: Record<string, unknown>, key: string): number | null {
+function readNullableNumber(
+  record: Record<string, unknown>,
+  key: string
+): number | null {
   return record[key] === null ? null : readNumber(record, key);
 }
 

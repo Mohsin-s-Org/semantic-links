@@ -11,41 +11,42 @@ class MemoryAdapter implements IndexStorageAdapter {
   readonly files = new Map<string, string | ArrayBuffer>();
   readonly directories = new Set<string>();
 
-  async exists(path: string): Promise<boolean> {
-    return this.files.has(path) || this.directories.has(path);
+  exists(path: string): Promise<boolean> {
+    return Promise.resolve(this.files.has(path) || this.directories.has(path));
   }
 
-  async read(path: string): Promise<string> {
+  read(path: string): Promise<string> {
     const value = this.files.get(path);
-    if (typeof value !== "string") {
-      throw new Error(`Missing text file: ${path}`);
-    }
-    return value;
+    return typeof value === "string"
+      ? Promise.resolve(value)
+      : Promise.reject(new Error(`Missing text file: ${path}`));
   }
 
-  async readBinary(path: string): Promise<ArrayBuffer> {
+  readBinary(path: string): Promise<ArrayBuffer> {
     const value = this.files.get(path);
-    if (!(value instanceof ArrayBuffer)) {
-      throw new Error(`Missing binary file: ${path}`);
-    }
-    return value.slice(0);
+    return value instanceof ArrayBuffer
+      ? Promise.resolve(value.slice(0))
+      : Promise.reject(new Error(`Missing binary file: ${path}`));
   }
 
-  async write(path: string, data: string): Promise<void> {
+  write(path: string, data: string): Promise<void> {
     this.files.set(path, data);
+    return Promise.resolve();
   }
 
-  async writeBinary(path: string, data: ArrayBuffer): Promise<void> {
+  writeBinary(path: string, data: ArrayBuffer): Promise<void> {
     this.files.set(path, data.slice(0));
+    return Promise.resolve();
   }
 
-  async mkdir(path: string): Promise<void> {
+  mkdir(path: string): Promise<void> {
     this.directories.add(path);
+    return Promise.resolve();
   }
 
-  async rmdir(path: string, recursive: boolean): Promise<void> {
+  rmdir(path: string, recursive: boolean): Promise<void> {
     if (!recursive) {
-      throw new Error("Tests require recursive directory removal.");
+      return Promise.reject(new Error("Tests require recursive directory removal."));
     }
     for (const key of [...this.files.keys()]) {
       if (key === path || key.startsWith(`${path}/`)) {
@@ -53,27 +54,31 @@ class MemoryAdapter implements IndexStorageAdapter {
       }
     }
     this.directories.delete(path);
+    return Promise.resolve();
   }
 
-  async remove(path: string): Promise<void> {
+  remove(path: string): Promise<void> {
     this.files.delete(path);
+    return Promise.resolve();
   }
 
-  async rename(oldPath: string, newPath: string): Promise<void> {
+  rename(oldPath: string, newPath: string): Promise<void> {
     const value = this.files.get(oldPath);
     if (value === undefined) {
-      throw new Error(`Missing rename source: ${oldPath}`);
+      return Promise.reject(new Error(`Missing rename source: ${oldPath}`));
     }
     this.files.set(newPath, cloneValue(value));
     this.files.delete(oldPath);
+    return Promise.resolve();
   }
 
-  async copy(oldPath: string, newPath: string): Promise<void> {
+  copy(oldPath: string, newPath: string): Promise<void> {
     const value = this.files.get(oldPath);
     if (value === undefined) {
-      throw new Error(`Missing copy source: ${oldPath}`);
+      return Promise.reject(new Error(`Missing copy source: ${oldPath}`));
     }
     this.files.set(newPath, cloneValue(value));
+    return Promise.resolve();
   }
 }
 

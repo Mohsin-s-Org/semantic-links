@@ -1,7 +1,7 @@
 import type { Extension } from "@codemirror/state";
 import {
-  EditorView,
   ViewPlugin,
+  type EditorView,
   type ViewUpdate
 } from "@codemirror/view";
 import type { LexicalSuggestion } from "../lexical/types.ts";

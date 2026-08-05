@@ -1,6 +1,11 @@
 export const PLUGIN_ID = "semantic-links";
 export const SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions";
-export const SETTINGS_VERSION = 1 as const;
+export const SHOW_INDEX_STATUS_COMMAND_ID = "show-index-status";
+export const REBUILD_INDEX_COMMAND_ID = "rebuild-index";
+export const DELETE_INDEX_COMMAND_ID = "delete-index";
+export const INDEX_STATUS_VIEW_TYPE = "semantic-links-index-status";
+export const INDEX_SCHEMA_VERSION = 1;
+export const SETTINGS_VERSION = 2 as const;
 export const DEFAULT_DEBOUNCE_MS = 350;
 export const MIN_DEBOUNCE_MS = 100;
 export const MAX_DEBOUNCE_MS = 2_000;

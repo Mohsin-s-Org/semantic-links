@@ -10,13 +10,15 @@ export interface EmbeddingBatchResult {
 }
 
 export class EmbeddingBatcher {
-  constructor(
-    private readonly client: EmbeddingClient,
-    private readonly batchSize = 8
-  ) {
+  private readonly client: EmbeddingClient;
+  private readonly batchSize: number;
+
+  constructor(client: EmbeddingClient, batchSize = 8) {
     if (!Number.isInteger(batchSize) || batchSize < 1) {
       throw new Error("Embedding batch size must be a positive integer.");
     }
+    this.client = client;
+    this.batchSize = batchSize;
   }
 
   async embed(

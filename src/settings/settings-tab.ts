@@ -1,8 +1,8 @@
 import {
   PluginSettingTab,
-  Setting,
   type App,
   type Plugin,
+  type Setting,
   type SettingDefinitionItem
 } from "obsidian";
 import {

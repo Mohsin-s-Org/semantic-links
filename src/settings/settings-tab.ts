@@ -124,9 +124,9 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       ),
       this.listSetting(
         "excludedProperties",
-        "Excluded properties",
-        "Exclude a note when any named frontmatter property is present. Names are case-insensitive.",
-        "private\nno-index",
+        "Excluded property rules",
+        "Use a property name to exclude it whenever present, or property=value to match one value. Rules are case-insensitive.",
+        "private\npublish=false",
         (values) => values.map((property) => property.toLocaleLowerCase())
       ),
       this.heading("Link insertion"),

@@ -11,6 +11,8 @@ test("missing settings load safe lexical-only defaults", () => {
   assert.equal(result.settings.lexicalMatchingEnabled, true);
   assert.equal(result.settings.semanticIndexingEnabled, false);
   assert.deepEqual(result.settings.excludedFolders, []);
+  assert.deepEqual(result.settings.excludedFiles, []);
+  assert.deepEqual(result.settings.excludedProperties, []);
 });
 
 test("malformed settings are discarded and replaced", () => {
@@ -27,7 +29,9 @@ test("legacy settings migrate and invalid values are repaired", () => {
     maxSuggestions: 999,
     minimumConfidence: -4,
     excludedFolders: ["Archive", "Archive", 42, ""],
-    excludedTags: ["#private", "private"]
+    excludedFiles: ["Private/Journal.md", "Private/Journal.md"],
+    excludedTags: ["#private", "private"],
+    excludedProperties: ["No-Index", "no-index"]
   });
 
   assert.equal(result.needsSave, true);
@@ -36,7 +40,9 @@ test("legacy settings migrate and invalid values are repaired", () => {
   assert.equal(result.settings.maxSuggestions, 20);
   assert.equal(result.settings.minimumConfidence, 0);
   assert.deepEqual(result.settings.excludedFolders, ["Archive"]);
+  assert.deepEqual(result.settings.excludedFiles, ["Private/Journal.md"]);
   assert.deepEqual(result.settings.excludedTags, ["private"]);
+  assert.deepEqual(result.settings.excludedProperties, ["no-index"]);
 });
 
 test("invalid values in the current schema are persisted after repair", () => {
@@ -49,7 +55,9 @@ test("invalid values in the current schema are persisted after repair", () => {
     maxSuggestions: 6,
     minimumConfidence: 0.55,
     excludedFolders: [],
+    excludedFiles: [],
     excludedTags: [],
+    excludedProperties: [],
     linkPathMode: "shortest"
   });
 

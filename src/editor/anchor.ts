@@ -1,3 +1,4 @@
+import { isProtectedAnchor } from "./protected-context.ts";
 import { createContextHash } from "./request-key.ts";
 
 export interface TextAnchor {
@@ -25,7 +26,7 @@ export function findTextAnchor(documentText: string, cursor: number): TextAnchor
     end += 1;
   }
 
-  if (start === end) {
+  if (start === end || isProtectedAnchor(documentText, start, end)) {
     return null;
   }
 

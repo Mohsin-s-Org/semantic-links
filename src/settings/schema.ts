@@ -15,105 +15,135 @@ import {
   readStringList
 } from "../utils/validation.ts";
 import { DEFAULT_SETTINGS, createDefaultSettings } from "./defaults.ts";
-import type { SettingsLoadResult } from "./types.ts";
+import type {
+  SemanticLinksSettings,
+  SettingsLoadResult
+} from "./types.ts";
 
 const LINK_PATH_MODES = ["shortest", "full"] as const;
-
-function readLegacySemanticToggle(record: Record<string, unknown>): boolean {
-  const current = record["semanticIndexingEnabled"];
-  if (typeof current === "boolean") {
-    return current;
-  }
-
-  const previous = record["semanticMatchingEnabled"];
-  if (typeof previous === "boolean") {
-    return previous;
-  }
-
-  const earliest = record["enableSemanticSearch"];
-  return typeof earliest === "boolean"
-    ? earliest
-    : DEFAULT_SETTINGS.semanticIndexingEnabled;
-}
+const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
+  "settingsVersion",
+  "automaticSuggestions",
+  "lexicalMatchingEnabled",
+  "semanticIndexingEnabled",
+  "debounceMs",
+  "maxSuggestions",
+  "minimumConfidence",
+  "excludedFolders",
+  "excludedTags",
+  "linkPathMode"
+]);
 
 export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
   if (!isRecord(input)) {
     return {
       settings: createDefaultSettings(),
-      migrated: input !== null && input !== undefined,
-      warnings: input === null || input === undefined
-        ? []
-        : ["Stored settings were not an object and were reset to safe defaults."]
+      needsSave: input !== null && input !== undefined
     };
   }
 
-  const warnings: string[] = [];
   const rawVersion = input["settingsVersion"];
   const version = typeof rawVersion === "number" && Number.isInteger(rawVersion)
     ? rawVersion
     : 0;
-
-  if (version > SETTINGS_VERSION) {
-    warnings.push(
-      "Stored settings were created by a newer plugin version. Unknown values were ignored."
-    );
-  } else if (version < SETTINGS_VERSION) {
-    warnings.push(`Migrated settings schema ${version} to ${SETTINGS_VERSION}.`);
-  }
+  const settings: SemanticLinksSettings = {
+    settingsVersion: SETTINGS_VERSION,
+    automaticSuggestions: readBoolean(
+      input,
+      "automaticSuggestions",
+      DEFAULT_SETTINGS.automaticSuggestions
+    ),
+    lexicalMatchingEnabled: readBoolean(
+      input,
+      "lexicalMatchingEnabled",
+      DEFAULT_SETTINGS.lexicalMatchingEnabled
+    ),
+    semanticIndexingEnabled: readSemanticToggle(input),
+    debounceMs: Math.round(readClampedNumber(
+      input,
+      "debounceMs",
+      DEFAULT_DEBOUNCE_MS,
+      MIN_DEBOUNCE_MS,
+      MAX_DEBOUNCE_MS
+    )),
+    maxSuggestions: Math.round(readClampedNumber(
+      input,
+      "maxSuggestions",
+      DEFAULT_MAX_SUGGESTIONS,
+      MIN_SUGGESTIONS,
+      MAX_SUGGESTIONS
+    )),
+    minimumConfidence: readClampedNumber(
+      input,
+      "minimumConfidence",
+      DEFAULT_SETTINGS.minimumConfidence,
+      0,
+      1
+    ),
+    excludedFolders: readStringList(
+      input,
+      "excludedFolders",
+      DEFAULT_SETTINGS.excludedFolders
+    ),
+    excludedTags: normalizeTags(readStringList(
+      input,
+      "excludedTags",
+      DEFAULT_SETTINGS.excludedTags
+    )),
+    linkPathMode: readEnum(
+      input,
+      "linkPathMode",
+      LINK_PATH_MODES,
+      DEFAULT_SETTINGS.linkPathMode
+    )
+  };
 
   return {
-    settings: {
-      settingsVersion: SETTINGS_VERSION,
-      automaticSuggestions: readBoolean(
-        input,
-        "automaticSuggestions",
-        DEFAULT_SETTINGS.automaticSuggestions
-      ),
-      lexicalMatchingEnabled: readBoolean(
-        input,
-        "lexicalMatchingEnabled",
-        DEFAULT_SETTINGS.lexicalMatchingEnabled
-      ),
-      semanticIndexingEnabled: readLegacySemanticToggle(input),
-      debounceMs: Math.round(readClampedNumber(
-        input,
-        "debounceMs",
-        DEFAULT_DEBOUNCE_MS,
-        MIN_DEBOUNCE_MS,
-        MAX_DEBOUNCE_MS
-      )),
-      maxSuggestions: Math.round(readClampedNumber(
-        input,
-        "maxSuggestions",
-        DEFAULT_MAX_SUGGESTIONS,
-        MIN_SUGGESTIONS,
-        MAX_SUGGESTIONS
-      )),
-      minimumConfidence: readClampedNumber(
-        input,
-        "minimumConfidence",
-        DEFAULT_SETTINGS.minimumConfidence,
-        0,
-        1
-      ),
-      excludedFolders: readStringList(
-        input,
-        "excludedFolders",
-        DEFAULT_SETTINGS.excludedFolders
-      ),
-      excludedTags: readStringList(
-        input,
-        "excludedTags",
-        DEFAULT_SETTINGS.excludedTags
-      ),
-      linkPathMode: readEnum(
-        input,
-        "linkPathMode",
-        LINK_PATH_MODES,
-        DEFAULT_SETTINGS.linkPathMode
-      )
-    },
-    migrated: version !== SETTINGS_VERSION,
-    warnings
+    settings,
+    needsSave: version <= SETTINGS_VERSION && !matchesCurrentSettings(input, settings)
   };
+}
+
+function readSemanticToggle(record: Record<string, unknown>): boolean {
+  for (const key of [
+    "semanticIndexingEnabled",
+    "semanticMatchingEnabled",
+    "enableSemanticSearch"
+  ]) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return DEFAULT_SETTINGS.semanticIndexingEnabled;
+}
+
+function normalizeTags(tags: string[]): string[] {
+  return [...new Set(tags
+    .map((tag) => tag.replace(/^#/u, ""))
+    .filter((tag) => tag.length > 0))];
+}
+
+function matchesCurrentSettings(
+  record: Record<string, unknown>,
+  settings: SemanticLinksSettings
+): boolean {
+  return Object.keys(record).every((key) => SETTING_KEYS.has(key as keyof SemanticLinksSettings))
+    && record["settingsVersion"] === settings.settingsVersion
+    && record["automaticSuggestions"] === settings.automaticSuggestions
+    && record["lexicalMatchingEnabled"] === settings.lexicalMatchingEnabled
+    && record["semanticIndexingEnabled"] === settings.semanticIndexingEnabled
+    && record["debounceMs"] === settings.debounceMs
+    && record["maxSuggestions"] === settings.maxSuggestions
+    && record["minimumConfidence"] === settings.minimumConfidence
+    && arraysEqual(record["excludedFolders"], settings.excludedFolders)
+    && arraysEqual(record["excludedTags"], settings.excludedTags)
+    && record["linkPathMode"] === settings.linkPathMode;
+}
+
+function arraysEqual(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((entry, index) => entry === expected[index]);
 }

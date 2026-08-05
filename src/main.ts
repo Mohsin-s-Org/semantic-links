@@ -2,7 +2,6 @@ import type { EditorView } from "@codemirror/view";
 import {
   Notice,
   Plugin,
-  getAllTags,
   type TFile
 } from "obsidian";
 import { SHOW_SUGGESTIONS_COMMAND_ID } from "./constants.ts";
@@ -14,15 +13,30 @@ import type {
 import { createControllerExtension } from "./editor/extension.ts";
 import {
   insertVerifiedWikilink,
+  type InsertWikilinkFailureCode,
   type InsertWikilinkResult
 } from "./editor/insertion.ts";
-import { EditorControllerRegistry, type ActiveEditorController } from "./editor/registry.ts";
+import {
+  EditorControllerRegistry,
+  type ActiveEditorController
+} from "./editor/registry.ts";
 import type { SuggestionRequestKey } from "./editor/request-key.ts";
+import { isFileExcluded } from "./scope/exclusions.ts";
 import { createDefaultSettings } from "./settings/defaults.ts";
 import { loadAndMigrateSettings } from "./settings/schema.ts";
 import { SemanticLinksSettingTab } from "./settings/settings-tab.ts";
 import type { SemanticLinksSettings } from "./settings/types.ts";
 import { FoundationSuggestionModal } from "./ui/foundation-suggestion-modal.ts";
+
+const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
+  "invalid-range": "The selected text range is no longer valid.",
+  "changed-anchor": "The text changed before the link could be inserted.",
+  "already-linked": "The selected text is already inside a wikilink.",
+  "protected-context": "Links cannot be inserted in this Markdown context.",
+  "target-not-found": "The target note no longer exists.",
+  "invalid-target": "Obsidian could not create a valid link target.",
+  "dispatch-failed": "The editor rejected the link transaction."
+};
 
 export default class SemanticLinksPlugin extends Plugin {
   override settings: SemanticLinksSettings = createDefaultSettings();
@@ -122,7 +136,7 @@ export default class SemanticLinksPlugin extends Plugin {
     ticket: SuggestionRequestTicket,
     documentVersion: number
   ): void {
-    if (ticket.signal.aborted) {
+    if (ticket.signal.aborted || !view.hasFocus) {
       return;
     }
 
@@ -159,7 +173,7 @@ export default class SemanticLinksPlugin extends Plugin {
       active.view.state.selection.main.head
     );
     if (anchor === null) {
-      new Notice("Place the cursor in a word to create a link anchor.");
+      new Notice("Place the cursor in eligible Markdown text first.");
       return;
     }
 
@@ -216,7 +230,7 @@ export default class SemanticLinksPlugin extends Plugin {
     }
 
     if (!result.ok) {
-      new Notice(this.describeInsertionFailure(result));
+      new Notice(INSERTION_FAILURE_MESSAGES[result.code]);
       return;
     }
 
@@ -241,48 +255,7 @@ export default class SemanticLinksPlugin extends Plugin {
   }
 
   private isExcluded(file: TFile): boolean {
-    const normalizedPath = file.path.toLocaleLowerCase();
-    const folderExcluded = this.settings.excludedFolders.some((folder) => {
-      const normalizedFolder = folder
-        .replace(/^\/+|\/+$/gu, "")
-        .toLocaleLowerCase();
-      return normalizedFolder.length > 0
-        && (normalizedPath === normalizedFolder
-          || normalizedPath.startsWith(`${normalizedFolder}/`));
-    });
-    if (folderExcluded) {
-      return true;
-    }
-
-    const excludedTags = new Set(this.settings.excludedTags.map((tag) => {
-      return `#${tag.toLocaleLowerCase()}`;
-    }));
-    const cache = this.app.metadataCache.getFileCache(file);
-    if (cache === null) {
-      return false;
-    }
-
-    return (getAllTags(cache) ?? [])
-      .some((tag) => excludedTags.has(tag.toLocaleLowerCase()));
-  }
-
-  private describeInsertionFailure(
-    result: Extract<InsertWikilinkResult, { ok: false }>
-  ): string {
-    switch (result.code) {
-      case "invalid-range":
-        return "The selected text range is no longer valid.";
-      case "changed-anchor":
-        return "The text changed before the link could be inserted.";
-      case "already-linked":
-        return "The selected text is already inside a wikilink.";
-      case "target-not-found":
-        return "The target note no longer exists.";
-      case "invalid-target":
-        return "Obsidian could not create a valid link target.";
-      case "dispatch-failed":
-        return "The editor rejected the link transaction.";
-    }
+    return isFileExcluded(this.app.metadataCache, file, this.settings);
   }
 
   private setStatus(message: string): void {

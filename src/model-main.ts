@@ -101,6 +101,22 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     }).open();
   }
 
+  async setModelEnabled(enabled: boolean): Promise<void> {
+    if (!this.settings.semanticModelInstalled) {
+      this.settings.semanticModelEnabled = false;
+      return;
+    }
+    if (enabled) {
+      const client = await this.modelManager.loadCached();
+      await (await this.waitForIndexManager())?.setEmbeddingClient(client);
+    } else {
+      await this.indexManager?.setEmbeddingClient(null);
+      this.modelManager.unload();
+    }
+    this.settings.semanticModelEnabled = enabled;
+    await this.saveSettings();
+  }
+
   private async removeModel(): Promise<void> {
     await this.indexManager?.setEmbeddingClient(null, true);
     await this.modelManager.remove();

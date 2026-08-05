@@ -1,5 +1,5 @@
 import type { EditorView } from "@codemirror/view";
-import { EditorSuggestionController } from "./controller.ts";
+import type { EditorSuggestionController } from "./controller.ts";
 
 export interface ActiveEditorController {
   view: EditorView;

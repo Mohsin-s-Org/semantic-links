@@ -5,6 +5,7 @@ import {
   getAllTags,
   type TFile
 } from "obsidian";
+import { SHOW_SUGGESTIONS_COMMAND_ID } from "./constants.ts";
 import { findTextAnchor, type TextAnchor } from "./editor/anchor.ts";
 import type {
   EditorSuggestionController,
@@ -17,66 +18,59 @@ import {
 } from "./editor/insertion.ts";
 import { EditorControllerRegistry, type ActiveEditorController } from "./editor/registry.ts";
 import type { SuggestionRequestKey } from "./editor/request-key.ts";
-import { FoundationServices } from "./services/foundation-services.ts";
 import { createDefaultSettings } from "./settings/defaults.ts";
 import { loadAndMigrateSettings } from "./settings/schema.ts";
 import { SemanticLinksSettingTab } from "./settings/settings-tab.ts";
 import type { SemanticLinksSettings } from "./settings/types.ts";
 import { FoundationSuggestionModal } from "./ui/foundation-suggestion-modal.ts";
 
-const PLACEHOLDER_COMMANDS = [
-  ["rebuild-index", "Rebuild index"],
-  ["pause-indexing", "Pause indexing"],
-  ["show-index-status", "Show index status"],
-  ["download-model", "Download model"],
-  ["remove-model", "Remove model"],
-  ["clear-feedback", "Clear feedback"],
-  ["open-diagnostics", "Open diagnostics"]
-] as const;
-
 export default class SemanticLinksPlugin extends Plugin {
   settings: SemanticLinksSettings = createDefaultSettings();
 
   private readonly controllers = new EditorControllerRegistry();
-  private readonly services = new FoundationServices();
   private readonly lifecycle = new AbortController();
   private statusBarElement: HTMLElement | null = null;
 
   override async onload(): Promise<void> {
-    const savedData: unknown = await this.loadData();
-    const loaded = loadAndMigrateSettings(savedData);
+    const loaded = loadAndMigrateSettings(await this.loadData() as unknown);
     this.settings = loaded.settings;
-    if (loaded.migrated) {
+    if (loaded.needsSave) {
       await this.saveSettings();
     }
 
     this.addSettingTab(new SemanticLinksSettingTab(this.app, this));
     this.statusBarElement = this.addStatusBarItem();
-    this.setStatus("ready · lexical foundation");
+    this.setStatus("loading");
 
     this.registerEditorExtension(createControllerExtension(
       this.controllers,
       (view, controller, documentVersion) => {
-        this.handleDocumentChanged(view, controller, documentVersion);
+        this.handleContextChanged(view, controller, documentVersion);
       }
     ));
 
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+      this.controllers.clearActive();
       this.controllers.invalidateAll();
-      this.setStatus("ready · context changed");
     }));
 
-    this.registerCommands();
+    this.addCommand({
+      id: SHOW_SUGGESTIONS_COMMAND_ID,
+      name: "Show link suggestions",
+      callback: () => {
+        this.openSuggestionChooser();
+      }
+    });
+
     this.app.workspace.onLayoutReady(() => {
       if (!this.lifecycle.signal.aborted) {
-        this.services.start();
+        this.setStatus("ready · lexical foundation");
       }
     });
   }
 
   override onunload(): void {
     this.lifecycle.abort();
-    this.services.stop();
     this.controllers.dispose();
     this.statusBarElement = null;
   }
@@ -85,27 +79,7 @@ export default class SemanticLinksPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  private registerCommands(): void {
-    this.addCommand({
-      id: "show-suggestions",
-      name: "Show link suggestions",
-      callback: () => {
-        this.openSuggestionChooser();
-      }
-    });
-
-    for (const [id, name] of PLACEHOLDER_COMMANDS) {
-      this.addCommand({
-        id,
-        name,
-        callback: () => {
-          new Notice(`${name} is reserved for a later implementation phase.`);
-        }
-      });
-    }
-  }
-
-  private handleDocumentChanged(
+  private handleContextChanged(
     view: EditorView,
     controller: EditorSuggestionController,
     documentVersion: number
@@ -191,7 +165,7 @@ export default class SemanticLinksPlugin extends Plugin {
 
     const candidates = this.app.vault.getMarkdownFiles()
       .filter((file) => file.path !== sourceFile.path && !this.isExcluded(file))
-      .slice(0, 200);
+      .sort((left, right) => left.path.localeCompare(right.path));
     if (candidates.length === 0) {
       new Notice("No eligible Markdown notes are available.");
       return;
@@ -271,16 +245,15 @@ export default class SemanticLinksPlugin extends Plugin {
     }
 
     const excludedTags = new Set(this.settings.excludedTags.map((tag) => {
-      const normalized = tag.replace(/^#/u, "").toLocaleLowerCase();
-      return `#${normalized}`;
+      return `#${tag.toLocaleLowerCase()}`;
     }));
     const cache = this.app.metadataCache.getFileCache(file);
     if (cache === null) {
       return false;
     }
 
-    const fileTags = getAllTags(cache) ?? [];
-    return fileTags.some((tag) => excludedTags.has(tag.toLocaleLowerCase()));
+    return (getAllTags(cache) ?? [])
+      .some((tag) => excludedTags.has(tag.toLocaleLowerCase()));
   }
 
   private describeInsertionFailure(

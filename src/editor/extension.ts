@@ -49,7 +49,9 @@ export function createControllerExtension(
         this.controller.invalidate();
       }
 
-      if (!isContextChange(update)) {
+      const contextChanged = isContextChange(update)
+        || (update.focusChanged && update.view.hasFocus);
+      if (!contextChanged) {
         return;
       }
 

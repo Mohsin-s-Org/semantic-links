@@ -2,22 +2,25 @@
 
 A privacy-first Obsidian plugin that suggests meaningful internal links while you write. Links are inserted only after explicit confirmation.
 
-Phase 2 adds a fully local lexical suggestion engine. It does not download a model, send vault content over the network, or alter a note without confirmation.
+Phase 3 adds a crash-safe persistent passage and vector index while preserving the fully local Phase 2 lexical suggestion engine.
 
-## Phase 2 capabilities
+## Current capabilities
 
-- In-memory scan of Markdown notes after the Obsidian layout is ready
-- Indexing of frontmatter titles, aliases, headings, tags and cleaned note text
-- Unicode-aware normalization, including Arabic diacritics, plus exact, prefix, token and fuzzy matching
+- In-memory lexical indexing of frontmatter titles, aliases, headings, tags and cleaned note text
+- Unicode-aware exact, prefix, token and fuzzy matching, including Arabic normalization
 - Paragraph- and sentence-aware context extraction from the active word or selected phrase
-- Existing Markdown safety guards for frontmatter, links, code, URLs, HTML, comments and math
-- Cursor-anchored suggestion popup with click confirmation
-- `Alt+L` manual keyboard mode with arrow, Enter and Escape controls
-- Incremental refresh after note creation, modification, rename, deletion or metadata changes
-- Revalidated wikilink insertion in one CodeMirror transaction
-- Protection against stale files, stale editor results, nested wikilinks and excluded notes
+- Cursor-anchored suggestions with click or keyboard confirmation
+- Structural Markdown chunking by headings, paragraphs and sentence boundaries
+- Source offsets, line numbers, heading breadcrumbs, previews and lexical terms for every passage
+- Persistent manifests, document records, chunk records and row-major `Float32Array` vector files
+- Dirty-generation journaling with `.next` validation and `.previous` recovery
+- Incremental create, modify, rename, delete and metadata-cache updates
+- Mtime and content-hash reuse so unchanged notes are not reprocessed or re-embedded
+- Exclusions for folders, files, tags, frontmatter properties and protected Markdown
+- Index status view plus rebuild and delete commands
+- Revalidated wikilink insertion in one undoable CodeMirror transaction
 
-Semantic embeddings and model runtime work remain deliberately excluded.
+The embedding layer is batch-oriented and accepts a verified local `EmbeddingClient`. Phase 3 does not create fake semantic vectors or silently download a model. Lexical suggestions and persistent passage preparation work without a model; the consent-based Transformers.js/ONNX runtime remains a separate feasibility and delivery step.
 
 ## Example
 
@@ -35,6 +38,21 @@ Plants lose [[Plant transpiration|water]] through their leaves during transpirat
 
 The plugin never inserts a link automatically.
 
+## Local index
+
+The persistent index is stored below the installed plugin directory, not in `data.json`:
+
+```text
+index/
+├─ manifest.json
+├─ documents.json
+├─ chunks.json
+├─ vectors.f32
+└─ journal.json
+```
+
+Generated index files remain local, are ignored by source control and are never included in GitHub releases. Use **Semantic Links: Show index status** to inspect progress, rebuild the index or delete the local copy without changing any note.
+
 ## Development
 
 Use Node.js 22 or later.
@@ -49,7 +67,7 @@ npm run verify:reproducible-build
 npm run ci
 ```
 
-`main.js` and `dist/` are generated and must not be committed.
+`main.js`, `dist/` and generated indexes must not be committed.
 
 ## Release assets
 
@@ -61,7 +79,7 @@ manifest.json
 styles.css
 ```
 
-No ZIP, model, WASM, checksum or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
+No ZIP, model, WASM, checksum, index or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
 
 ## Planning documents
 
@@ -70,6 +88,7 @@ No ZIP, model, WASM, checksum or documentation assets are attached. Release tags
 - [Obsidian implementation guardrails](docs/obsidian-implementation-guardrails.md)
 - [Phase 1 foundation checklist](docs/phase-1-foundation-checklist.md)
 - [Phase 2 lexical checklist](docs/phase-2-lexical-checklist.md)
+- [Phase 3 persistent index checklist](docs/phase-3-persistent-index-checklist.md)
 - [Community Plugins release checklist](docs/community-plugin-release-checklist.md)
 - [GitHub Actions usage policy](GITHUB_ACTIONS_POLICY.md)
 
@@ -77,8 +96,8 @@ The addendum and guardrails are authoritative where they conflict with older imp
 
 ## Privacy
 
-Vault content, filenames, links, tags and index records remain on the device. The Phase 2 index is held in memory and is discarded when the plugin unloads. Future model or runtime downloads require explicit approval.
+Vault content, filenames, links, tags, passages, embeddings and index records remain on the device. The plugin sends no vault data to a hosted API. Future model or runtime downloads require explicit consent, pinned revisions, integrity checks and recoverable failure handling.
 
 ## Status
 
-Phase 2 lexical suggestions are implemented. A manual Obsidian desktop walkthrough remains required before release. The next milestone is the local runtime feasibility spike for a later semantic phase.
+Phase 3 persistent indexing is implemented. A manual Obsidian desktop walkthrough remains required before release. The next engineering step is the local model/runtime feasibility spike, followed by Phase 4 hybrid semantic retrieval and explanations.

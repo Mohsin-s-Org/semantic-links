@@ -9,7 +9,8 @@ export class ModelSetupModal extends Modal {
   constructor(
     app: App,
     private readonly onDownload: () => Promise<void>,
-    private readonly onLexicalOnly: () => Promise<void>
+    private readonly onLexicalOnly: () => Promise<void>,
+    private readonly onClosed: () => void
   ) {
     super(app);
   }
@@ -41,31 +42,28 @@ export class ModelSetupModal extends Modal {
         button.setButtonText("Cancel").onClick(() => this.close());
       })
       .addButton((button) => {
-        button
-          .setCta()
-          .setButtonText("Download and enable")
-          .onClick(() => {
-            void this.run(this.onDownload);
-          });
+        button.setCta().setButtonText("Download and enable").onClick(() => {
+          void this.run(this.onDownload);
+        });
       });
   }
 
   updateStatus(status: ModelStatus): void {
-    if (this.statusEl !== null) {
-      this.statusEl.setText(status.message);
+    this.statusEl?.setText(status.message);
+    if (this.progressEl === null) {
+      return;
     }
-    if (this.progressEl !== null) {
-      this.progressEl.hidden = status.state !== "loading";
-      if (status.percent === null) {
-        this.progressEl.removeAttribute("value");
-      } else {
-        this.progressEl.max = 100;
-        this.progressEl.value = status.percent;
-      }
+    this.progressEl.hidden = status.state !== "loading";
+    if (status.percent === null) {
+      this.progressEl.removeAttribute("value");
+    } else {
+      this.progressEl.max = 100;
+      this.progressEl.value = status.percent;
     }
   }
 
   override onClose(): void {
+    this.onClosed();
     this.contentEl.empty();
     this.statusEl = null;
     this.progressEl = null;

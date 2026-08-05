@@ -89,11 +89,12 @@ test("identical transaction events schedule one request", () => {
   assert.equal(tickets[0]?.serializedKey, serializeRequestKey(key));
 });
 
-test("newer work aborts and supersedes stale work", () => {
+test("a new context aborts stale work before its debounce expires", () => {
   const scheduler = new FakeScheduler();
   const controller = new EditorSuggestionController(scheduler);
   const firstKey = createKey();
   const secondKey = createKey({
+    filePath: "Notes/other.md",
     documentVersion: 2,
     contextHash: createContextHash("new context")
   });
@@ -105,30 +106,46 @@ test("newer work aborts and supersedes stale work", () => {
     return pending;
   });
   scheduler.advanceBy(0);
-  controller.schedule(secondKey, 0, (ticket) => {
+
+  assert.equal(controller.schedule(secondKey, 100, (ticket) => {
     tickets.push(ticket);
     return pending;
-  });
-  scheduler.advanceBy(0);
+  }), "scheduled");
+  assert.equal(tickets[0]?.signal.aborted, true);
+  assert.equal(tickets.length, 1);
 
-  const firstTicket = tickets[0];
+  scheduler.advanceBy(100);
   const secondTicket = tickets[1];
-  assert.ok(firstTicket);
   assert.ok(secondTicket);
-  assert.equal(firstTicket.signal.aborted, true);
   assert.equal(secondTicket.signal.aborted, false);
-  assert.equal(controller.acceptResult(firstTicket, firstKey), false);
   assert.equal(controller.acceptResult(secondTicket, secondKey), true);
 });
 
-test("undo and redo suppress immediate rescheduling", () => {
+test("failed requests can be retried for the same context", () => {
   const scheduler = new FakeScheduler();
   const controller = new EditorSuggestionController(scheduler);
   const key = createKey();
 
+  controller.schedule(key, 0, () => {
+    throw new Error("expected test failure");
+  });
+  scheduler.advanceBy(0);
+
+  assert.equal(controller.schedule(key, 0, () => undefined), "scheduled");
+});
+
+test("composition and undo suppress immediate scheduling", () => {
+  const scheduler = new FakeScheduler();
+  const controller = new EditorSuggestionController(scheduler);
+  const key = createKey();
+
+  controller.setComposing(true);
+  assert.equal(controller.schedule(key, 0, () => undefined), "suppressed");
+  controller.setComposing(false);
+  assert.equal(controller.schedule(key, 0, () => undefined), "scheduled");
+
   controller.noteUndoRedo();
   assert.equal(controller.schedule(key, 0, () => undefined), "suppressed");
-
   scheduler.advanceBy(500);
   assert.equal(controller.schedule(key, 0, () => undefined), "scheduled");
 });

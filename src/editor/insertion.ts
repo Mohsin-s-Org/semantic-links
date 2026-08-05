@@ -28,6 +28,7 @@ export interface InsertWikilinkRequest {
 export type InsertWikilinkFailureCode =
   | "invalid-range"
   | "changed-anchor"
+  | "already-linked"
   | "target-not-found"
   | "invalid-target"
   | "dispatch-failed";
@@ -49,23 +50,22 @@ export function insertVerifiedWikilink(
   request: InsertWikilinkRequest,
   onSuccess: (message: string) => void = () => undefined
 ): InsertWikilinkResult {
-  const documentLength = editor.state.doc.length;
+  const documentText = editor.state.doc.toString();
   if (
     !Number.isInteger(request.anchorStart)
     || !Number.isInteger(request.anchorEnd)
     || request.anchorStart < 0
     || request.anchorEnd <= request.anchorStart
-    || request.anchorEnd > documentLength
+    || request.anchorEnd > documentText.length
   ) {
     return { ok: false, code: "invalid-range" };
   }
 
-  const currentText = editor.state.doc.sliceString(
-    request.anchorStart,
-    request.anchorEnd
-  );
-  if (currentText !== request.expectedText) {
+  if (documentText.slice(request.anchorStart, request.anchorEnd) !== request.expectedText) {
     return { ok: false, code: "changed-anchor" };
+  }
+  if (isInsideWikilink(documentText, request.anchorStart, request.anchorEnd)) {
+    return { ok: false, code: "already-linked" };
   }
 
   const target = app.metadataCache.getFirstLinkpathDest(
@@ -118,6 +118,18 @@ export function insertVerifiedWikilink(
     insertedText,
     targetPath: target.path
   };
+}
+
+function isInsideWikilink(documentText: string, start: number, end: number): boolean {
+  const before = documentText.slice(0, start);
+  const opening = before.lastIndexOf("[[");
+  if (opening <= before.lastIndexOf("]]")) {
+    return false;
+  }
+
+  const closing = documentText.indexOf("]]", end);
+  const nextOpening = documentText.indexOf("[[", end);
+  return closing !== -1 && (nextOpening === -1 || closing < nextOpening);
 }
 
 function normalizeHeading(value: string | null): string | null {

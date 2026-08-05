@@ -5,11 +5,11 @@ import {
   DOWNLOAD_MODEL_COMMAND_ID,
   REMOVE_MODEL_COMMAND_ID
 } from "./constants.ts";
-import { createSemanticQueryExtension } from "./editor/semantic-extension.ts";
 import type { SuggestionContext } from "./editor/context.ts";
+import { createSemanticQueryExtension } from "./editor/semantic-extension.ts";
 import { LocalModelManager } from "./embeddings/model-manager.ts";
-import { isFileExcluded } from "./scope/exclusions.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
+import { isFileExcluded } from "./scope/exclusions.ts";
 import { ModelRemovalModal } from "./ui/model-removal-modal.ts";
 import { ModelSetupModal } from "./ui/model-setup-modal.ts";
 
@@ -19,13 +19,14 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
 
   override async onload(): Promise<void> {
     await super.onload();
+    const host = this;
 
     this.registerEditorExtension(createSemanticQueryExtension({
       get debounceMs() {
-        return Math.max(100, thisHost.settings.debounceMs);
+        return Math.max(100, host.settings.debounceMs);
       },
       get maxSuggestions() {
-        return thisHost.settings.maxSuggestions;
+        return host.settings.maxSuggestions;
       },
       canSearch: (view) => this.canSearchSemantically(view),
       sourcePath: () => this.app.workspace.getActiveFile()?.path ?? null,
@@ -33,7 +34,6 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
         return this.searchSemantically(context, sourcePath, signal);
       }
     }));
-    const thisHost = this;
 
     this.addCommand({
       id: DOWNLOAD_MODEL_COMMAND_ID,
@@ -100,8 +100,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
         this.settings.semanticModelEnabled = true;
         this.settings.semanticIndexingEnabled = true;
         await this.saveSettings();
-        const manager = await this.waitForIndexManager();
-        await manager?.setEmbeddingClient(client);
+        await (await this.waitForIndexManager())?.setEmbeddingClient(client);
         new Notice("Local semantic matching is enabled.");
       },
       async () => {
@@ -140,8 +139,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       return;
     }
     const client = await this.modelManager.loadCached();
-    const manager = await this.waitForIndexManager();
-    await manager?.setEmbeddingClient(client);
+    await (await this.waitForIndexManager())?.setEmbeddingClient(client);
   }
 
   private async waitForIndexManager(): Promise<typeof this.indexManager> {

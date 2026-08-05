@@ -11,6 +11,7 @@ export interface IndexManifest {
   schemaVersion: number;
   pluginVersion: string;
   vaultFingerprint: string;
+  scopeFingerprint: string;
   model: ModelDescriptor | null;
   vectorCount: number;
   dimensions: number;

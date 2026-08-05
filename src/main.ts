@@ -274,7 +274,12 @@ export default class SemanticLinksPlugin extends Plugin {
       const normalized = tag.replace(/^#/u, "").toLocaleLowerCase();
       return `#${normalized}`;
     }));
-    const fileTags = getAllTags(this.app.metadataCache.getFileCache(file)) ?? [];
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (cache === null) {
+      return false;
+    }
+
+    const fileTags = getAllTags(cache) ?? [];
     return fileTags.some((tag) => excludedTags.has(tag.toLocaleLowerCase()));
   }
 

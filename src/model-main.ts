@@ -25,7 +25,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     this.addCommand({
       id: REMOVE_MODEL_COMMAND_ID,
       name: "Remove local semantic model and vectors",
-      callback: () => this.confirmModelRemoval()
+      callback: () => this.requestModelRemoval()
     });
 
     this.app.workspace.onLayoutReady(() => {
@@ -70,7 +70,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     return vector === null ? [] : manager.searchSemantic(vector, sourcePath, 40);
   }
 
-  private openModelSetup(): void {
+  openModelSetup(): void {
     let unsubscribe = (): void => undefined;
     const modal = new ModelSetupModal(
       this.app,
@@ -93,7 +93,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     modal.open();
   }
 
-  private confirmModelRemoval(): void {
+  requestModelRemoval(): void {
     new ModelRemovalModal(this.app, () => {
       void this.removeModel().catch(() => {
         new Notice("The local semantic model could not be removed completely.");

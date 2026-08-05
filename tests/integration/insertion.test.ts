@@ -140,6 +140,29 @@ test("changed anchors fail without mutating the document", () => {
   assert.equal(editor.state.doc.toString(), "Plants lose moisture.");
 });
 
+test("anchors inside an existing wikilink are rejected", () => {
+  const target = createFile("Biology/Transpiration.md");
+  const editor = new RecordingEditor("Plants lose [[Transpiration|water]].");
+
+  const result = insertVerifiedWikilink(
+    createApp(target),
+    editor,
+    {
+      sourcePath: "Biology/Plants.md",
+      anchorStart: 28,
+      anchorEnd: 33,
+      expectedText: "water",
+      targetPath: target.path,
+      targetHeading: null,
+      displayText: "water",
+      pathMode: "shortest"
+    }
+  );
+
+  assert.deepEqual(result, { ok: false, code: "already-linked" });
+  assert.equal(editor.dispatchCount, 0);
+});
+
 test("missing targets fail before dispatch", () => {
   const editor = new RecordingEditor("Plants lose water.");
   const result = insertVerifiedWikilink(

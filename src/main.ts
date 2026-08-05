@@ -111,8 +111,7 @@ export default class SemanticLinksPlugin extends Plugin {
       anchor,
       "automatic"
     );
-    controller.schedule(requestKey, this.settings.debounceMs, async (ticket) => {
-      await Promise.resolve();
+    controller.schedule(requestKey, this.settings.debounceMs, (ticket) => {
       this.acceptFoundationResult(view, controller, ticket, documentVersion);
     });
   }
@@ -183,6 +182,15 @@ export default class SemanticLinksPlugin extends Plugin {
     anchor: TextAnchor,
     target: TFile
   ): void {
+    if (this.app.workspace.getActiveFile()?.path !== sourceFile.path) {
+      new Notice("The active note changed before the link could be inserted.");
+      return;
+    }
+    if (this.isExcluded(target)) {
+      new Notice("The target note is now excluded.");
+      return;
+    }
+
     active.controller.beginPluginTransaction();
     let result: InsertWikilinkResult;
     try {
@@ -226,6 +234,7 @@ export default class SemanticLinksPlugin extends Plugin {
       documentVersion,
       anchorStart: anchor.start,
       anchorEnd: anchor.end,
+      anchorText: anchor.text,
       contextHash: anchor.contextHash,
       mode
     };
@@ -265,6 +274,8 @@ export default class SemanticLinksPlugin extends Plugin {
         return "The selected text range is no longer valid.";
       case "changed-anchor":
         return "The text changed before the link could be inserted.";
+      case "already-linked":
+        return "The selected text is already inside a wikilink.";
       case "target-not-found":
         return "The target note no longer exists.";
       case "invalid-target":

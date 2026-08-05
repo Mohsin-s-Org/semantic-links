@@ -16,6 +16,7 @@ const requiredFiles = [
   "eslint.config.mjs",
   "esbuild.config.mjs",
   "styles.css",
+  "scripts/verify-reproducible-build.mjs",
   "src/main.ts",
   "src/types/obsidian-history-handler-fix.d.ts"
 ];
@@ -54,10 +55,12 @@ assert(manifest.isDesktopOnly === true, "Phase 1 must remain desktop-only.");
 assert(manifest.minAppVersion === "1.13.0", "Declarative settings require Obsidian 1.13.0 or later.");
 assert(/explicit confirmation/iu.test(manifest.description), "Manifest description must state the explicit-confirmation rule.");
 assert(packageJson.devDependencies?.obsidian === "1.13.1", "Use the official Obsidian 1.13 type package.");
+assert(packageJson.scripts?.["verify:reproducible-build"] !== undefined, "A reproducible-build check must remain configured.");
 assert(tsconfig.compilerOptions?.strict === true, "Strict TypeScript must remain enabled.");
 assert(tsconfig.compilerOptions?.skipLibCheck === false, "Library type checking must not be skipped.");
 assert(constantsSource.includes('SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions"'), "The implemented command must use a short local id.");
 assert(!buildSource.includes("--minify"), "The release bundle must remain readable for review.");
+assert(ciWorkflow.includes("npm run verify:reproducible-build"), "CI must compare two production builds.");
 assert(releaseWorkflow.includes("uses: actions/attest@"), "Releases must use the current GitHub attestation action.");
 
 for (const workflow of [ciWorkflow, releaseWorkflow]) {

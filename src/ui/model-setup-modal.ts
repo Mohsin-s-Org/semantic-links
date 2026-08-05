@@ -5,6 +5,7 @@ import type { ModelStatus } from "../embeddings/model-manager.ts";
 export class ModelSetupModal extends Modal {
   private statusEl: HTMLParagraphElement | null = null;
   private progressEl: HTMLProgressElement | null = null;
+  private running = false;
 
   constructor(
     app: App,
@@ -67,13 +68,19 @@ export class ModelSetupModal extends Modal {
     this.contentEl.empty();
     this.statusEl = null;
     this.progressEl = null;
+    this.running = false;
   }
 
   private async run(action: () => Promise<void>): Promise<void> {
+    if (this.running) {
+      return;
+    }
+    this.running = true;
     try {
       await action();
       this.close();
     } catch {
+      this.running = false;
       // The model manager supplies the actionable status in the modal.
     }
   }

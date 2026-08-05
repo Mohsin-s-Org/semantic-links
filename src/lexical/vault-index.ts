@@ -69,10 +69,14 @@ export class LexicalVaultIndex {
       }
       const file = files[index];
       if (file !== undefined) {
+        const path = file.path;
+        const version = this.refreshVersions.get(path) ?? 0;
         const document = await this.readDocument(file);
         if (
           document !== null
           && document !== undefined
+          && file.path === path
+          && this.refreshVersions.get(path) === version
           && !this.shouldStop(generation, signal)
         ) {
           this.index.upsert(document);

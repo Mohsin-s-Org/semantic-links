@@ -34,13 +34,15 @@ export class IndexStatusView extends ItemView {
     return "database";
   }
 
-  override async onOpen(): Promise<void> {
+  override onOpen(): Promise<void> {
     this.bindManager();
+    return Promise.resolve();
   }
 
-  override async onClose(): Promise<void> {
+  override onClose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    return Promise.resolve();
   }
 
   bindManager(): void {

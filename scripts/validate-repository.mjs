@@ -29,32 +29,22 @@ for (const path of trackedFiles) {
   assert(!/^(?:index|model|models|dist)\//u.test(normalized), `Generated runtime or release asset is tracked: ${path}`);
 }
 
-const [manifest, packageJson, tsconfig, mainSource] = await Promise.all([
+const [manifest, packageJson, tsconfig, constantsSource, buildSource] = await Promise.all([
   readJson("manifest.json"),
   readJson("package.json"),
   readJson("tsconfig.json"),
-  readFile("src/main.ts", "utf8")
+  readFile("src/constants.ts", "utf8"),
+  readFile("esbuild.config.mjs", "utf8")
 ]);
 
 assert(manifest.isDesktopOnly === true, "Phase 1 must remain desktop-only.");
+assert(manifest.minAppVersion === "1.13.0", "Declarative settings require Obsidian 1.13.0 or later.");
 assert(/explicit confirmation/iu.test(manifest.description), "Manifest description must state the explicit-confirmation rule.");
-assert(typeof packageJson.devDependencies?.obsidian === "string", "The official obsidian package must be a development dependency.");
+assert(packageJson.devDependencies?.obsidian === "1.13.1", "Use the official Obsidian 1.13 type package.");
 assert(tsconfig.compilerOptions?.strict === true, "Strict TypeScript must remain enabled.");
 assert(tsconfig.compilerOptions?.skipLibCheck === false, "Library type checking must not be skipped.");
-
-const requiredCommandIds = [
-  "show-suggestions",
-  "rebuild-index",
-  "pause-indexing",
-  "show-index-status",
-  "download-model",
-  "remove-model",
-  "clear-feedback",
-  "open-diagnostics"
-];
-for (const commandId of requiredCommandIds) {
-  assert(mainSource.includes(`\"${commandId}\"`), `Missing reserved local command id: ${commandId}`);
-}
+assert(constantsSource.includes('SHOW_SUGGESTIONS_COMMAND_ID = "show-suggestions"'), "The implemented command must use a short local id.");
+assert(!buildSource.includes("--minify"), "The release bundle must remain readable for review.");
 
 console.log(`Repository policy verified across ${trackedFiles.length} tracked files.`);
 

@@ -66,3 +66,24 @@ test("splits oversized prose at sentence boundaries with one-sentence overlap", 
   assert.ok(firstLastSentence !== undefined);
   assert.equal(chunks[1]?.text.includes(firstLastSentence), true);
 });
+
+test("never exceeds the maximum when an overlap would be too large", () => {
+  const sentence = (label: string, words: number): string => {
+    return `${label} ${Array.from({ length: words - 1 }, () => label).join(" ")}.`;
+  };
+  const chunks = chunkMarkdown([
+    sentence("alpha", 20),
+    sentence("beta", 20),
+    sentence("gamma", 5)
+  ].join(" "), "Uneven prose", {
+    minimumWords: 1,
+    targetWords: 25,
+    maximumWords: 30
+  });
+
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(
+    chunks.map((chunk) => tokenizeLexicalText(chunk.text).length),
+    [20, 25]
+  );
+});

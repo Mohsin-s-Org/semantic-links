@@ -30,7 +30,6 @@ export function createControllerExtension(
   return ViewPlugin.fromClass(class {
     private readonly controller = new EditorSuggestionController();
     private readonly view: EditorView;
-    private documentVersion = 0;
 
     constructor(view: EditorView) {
       this.view = view;
@@ -49,12 +48,14 @@ export function createControllerExtension(
         this.controller.invalidate();
       }
 
-      if (!isContextChange(update)) {
+      const contextChanged = isContextChange(update)
+        || (update.focusChanged && update.view.hasFocus);
+      if (!contextChanged) {
         return;
       }
 
       if (update.docChanged) {
-        this.documentVersion += 1;
+        this.controller.noteDocumentChange();
       }
 
       for (const transaction of update.transactions) {
@@ -71,7 +72,11 @@ export function createControllerExtension(
       }
 
       if (update.view.hasFocus && !update.view.composing) {
-        onContextChanged(update.view, this.controller, this.documentVersion);
+        onContextChanged(
+          update.view,
+          this.controller,
+          this.controller.documentVersion
+        );
       }
     }
 

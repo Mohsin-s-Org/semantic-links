@@ -62,11 +62,18 @@ function createFile(path: string): TFile {
   } as unknown as TFile;
 }
 
-function createApp(target: TFile | null, shortestPath = "Transpiration"): App {
+function createApp(
+  target: TFile | null,
+  shortestPath = "Transpiration",
+  headings: readonly string[] = []
+): App {
   return {
     metadataCache: {
       getFirstLinkpathDest: () => target,
-      fileToLinktext: () => shortestPath
+      fileToLinktext: () => shortestPath,
+      getFileCache: () => ({
+        headings: headings.map((heading) => ({ heading }))
+      })
     }
   } as unknown as App;
 }
@@ -184,12 +191,35 @@ test("missing targets fail before dispatch", () => {
   assert.equal(editor.dispatchCount, 0);
 });
 
+test("missing headings fail before dispatch", () => {
+  const target = createFile("Reference/Water Cycle.md");
+  const editor = new RecordingEditor("Read evaporation now.");
+
+  const result = insertVerifiedWikilink(
+    createApp(target, "Water Cycle", ["Condensation"]),
+    editor,
+    {
+      sourcePath: "Notes/Today.md",
+      anchorStart: 5,
+      anchorEnd: 16,
+      expectedText: "evaporation",
+      targetPath: target.path,
+      targetHeading: "Evaporation",
+      displayText: "evaporation",
+      pathMode: "shortest"
+    }
+  );
+
+  assert.deepEqual(result, { ok: false, code: "target-not-found" });
+  assert.equal(editor.dispatchCount, 0);
+});
+
 test("full-path mode and headings are applied in the same transaction", () => {
   const target = createFile("Reference/Water Cycle.md");
   const editor = new RecordingEditor("Read evaporation now.");
 
   const result = insertVerifiedWikilink(
-    createApp(target),
+    createApp(target, "Water Cycle", ["Evaporation"]),
     editor,
     {
       sourcePath: "Notes/Today.md",

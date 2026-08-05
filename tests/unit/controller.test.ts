@@ -72,6 +72,17 @@ function createKey(overrides: Partial<SuggestionRequestKey> = {}): SuggestionReq
   };
 }
 
+test("tracks the current editor document version", () => {
+  const controller = new EditorSuggestionController();
+
+  assert.equal(controller.documentVersion, 0);
+  controller.noteDocumentChange();
+  controller.noteDocumentChange();
+  assert.equal(controller.documentVersion, 2);
+
+  controller.dispose();
+});
+
 test("identical transaction events schedule one request", () => {
   const scheduler = new FakeScheduler();
   const controller = new EditorSuggestionController(scheduler);

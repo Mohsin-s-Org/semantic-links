@@ -84,6 +84,15 @@ export function insertVerifiedWikilink(
     return { ok: false, code: "target-not-found" };
   }
 
+  const heading = normalizeHeading(request.targetHeading);
+  if (
+    heading !== null
+    && !(app.metadataCache.getFileCache(target)?.headings ?? [])
+      .some((candidate) => normalizeHeading(candidate.heading) === heading)
+  ) {
+    return { ok: false, code: "target-not-found" };
+  }
+
   const linkText = request.pathMode === "full"
     ? target.path.replace(/\.md$/iu, "")
     : app.metadataCache.fileToLinktext(target, request.sourcePath, true);
@@ -91,7 +100,6 @@ export function insertVerifiedWikilink(
     return { ok: false, code: "invalid-target" };
   }
 
-  const heading = normalizeHeading(request.targetHeading);
   const destination = heading === null ? linkText : `${linkText}#${heading}`;
   const alias = (request.displayText ?? request.expectedText).trim();
   const includeAlias = alias.length > 0

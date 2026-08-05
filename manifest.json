@@ -1,0 +1,9 @@
+{
+  "id": "semantic-links",
+  "name": "Semantic Links",
+  "version": "0.1.0",
+  "minAppVersion": "1.13.0",
+  "description": "Suggest meaningful internal links while you write. Links are inserted only after explicit confirmation.",
+  "author": "Mohsin Osman",
+  "isDesktopOnly": true
+}

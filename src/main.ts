@@ -1,0 +1,264 @@
+import type { EditorView } from "@codemirror/view";
+import {
+  Notice,
+  Plugin,
+  type TFile
+} from "obsidian";
+import { SHOW_SUGGESTIONS_COMMAND_ID } from "./constants.ts";
+import { findTextAnchor, type TextAnchor } from "./editor/anchor.ts";
+import type {
+  EditorSuggestionController,
+  SuggestionRequestTicket
+} from "./editor/controller.ts";
+import { createControllerExtension } from "./editor/extension.ts";
+import {
+  insertVerifiedWikilink,
+  type InsertWikilinkFailureCode,
+  type InsertWikilinkResult
+} from "./editor/insertion.ts";
+import {
+  EditorControllerRegistry,
+  type ActiveEditorController
+} from "./editor/registry.ts";
+import type { SuggestionRequestKey } from "./editor/request-key.ts";
+import { isFileExcluded } from "./scope/exclusions.ts";
+import { createDefaultSettings } from "./settings/defaults.ts";
+import { loadAndMigrateSettings } from "./settings/schema.ts";
+import { SemanticLinksSettingTab } from "./settings/settings-tab.ts";
+import type { SemanticLinksSettings } from "./settings/types.ts";
+import { FoundationSuggestionModal } from "./ui/foundation-suggestion-modal.ts";
+
+const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
+  "invalid-range": "The selected text range is no longer valid.",
+  "changed-anchor": "The text changed before the link could be inserted.",
+  "already-linked": "The selected text is already inside a wikilink.",
+  "protected-context": "Links cannot be inserted in this Markdown context.",
+  "target-not-found": "The target note no longer exists.",
+  "invalid-target": "Obsidian could not create a valid link target.",
+  "dispatch-failed": "The editor rejected the link transaction."
+};
+
+export default class SemanticLinksPlugin extends Plugin {
+  override settings: SemanticLinksSettings = createDefaultSettings();
+
+  private readonly controllers = new EditorControllerRegistry();
+  private readonly lifecycle = new AbortController();
+  private statusBarElement: HTMLElement | null = null;
+
+  override async onload(): Promise<void> {
+    const savedData: unknown = await this.loadData();
+    const loaded = loadAndMigrateSettings(savedData);
+    this.settings = loaded.settings;
+    if (loaded.needsSave) {
+      await this.saveSettings();
+    }
+
+    this.addSettingTab(new SemanticLinksSettingTab(this.app, this));
+    this.statusBarElement = this.addStatusBarItem();
+    this.setStatus("loading");
+
+    this.registerEditorExtension(createControllerExtension(
+      this.controllers,
+      (view, controller, documentVersion) => {
+        this.handleContextChanged(view, controller, documentVersion);
+      }
+    ));
+
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+      this.controllers.clearActive();
+      this.controllers.invalidateAll();
+    }));
+
+    this.addCommand({
+      id: SHOW_SUGGESTIONS_COMMAND_ID,
+      name: "Show link suggestions",
+      callback: () => {
+        this.openSuggestionChooser();
+      }
+    });
+
+    this.app.workspace.onLayoutReady(() => {
+      if (!this.lifecycle.signal.aborted) {
+        this.setStatus("ready · lexical foundation");
+      }
+    });
+  }
+
+  override onunload(): void {
+    this.lifecycle.abort();
+    this.controllers.dispose();
+    this.statusBarElement = null;
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  private handleContextChanged(
+    view: EditorView,
+    controller: EditorSuggestionController,
+    documentVersion: number
+  ): void {
+    if (!this.settings.automaticSuggestions || !this.settings.lexicalMatchingEnabled) {
+      controller.hideVisibleSuggestions();
+      return;
+    }
+
+    const sourceFile = this.app.workspace.getActiveFile();
+    if (sourceFile === null || this.isExcluded(sourceFile)) {
+      controller.hideVisibleSuggestions();
+      return;
+    }
+
+    const anchor = findTextAnchor(
+      view.state.doc.toString(),
+      view.state.selection.main.head
+    );
+    if (anchor === null) {
+      controller.hideVisibleSuggestions();
+      return;
+    }
+
+    const requestKey = this.createRequestKey(
+      sourceFile.path,
+      documentVersion,
+      anchor,
+      "automatic"
+    );
+    controller.schedule(requestKey, this.settings.debounceMs, (ticket) => {
+      this.acceptFoundationResult(view, controller, ticket, documentVersion);
+    });
+  }
+
+  private acceptFoundationResult(
+    view: EditorView,
+    controller: EditorSuggestionController,
+    ticket: SuggestionRequestTicket,
+    documentVersion: number
+  ): void {
+    if (ticket.signal.aborted || !view.hasFocus) {
+      return;
+    }
+
+    const sourceFile = this.app.workspace.getActiveFile();
+    const anchor = findTextAnchor(
+      view.state.doc.toString(),
+      view.state.selection.main.head
+    );
+    if (sourceFile === null || anchor === null) {
+      return;
+    }
+
+    const currentKey = this.createRequestKey(
+      sourceFile.path,
+      documentVersion,
+      anchor,
+      "automatic"
+    );
+    if (controller.acceptResult(ticket, currentKey)) {
+      this.setStatus(`candidate context · ${anchor.text}`);
+    }
+  }
+
+  private openSuggestionChooser(): void {
+    const active = this.controllers.getActive();
+    const sourceFile = this.app.workspace.getActiveFile();
+    if (active === null || sourceFile === null) {
+      new Notice("Open a Markdown note and place the cursor in a word first.");
+      return;
+    }
+
+    const anchor = findTextAnchor(
+      active.view.state.doc.toString(),
+      active.view.state.selection.main.head
+    );
+    if (anchor === null) {
+      new Notice("Place the cursor in eligible Markdown text first.");
+      return;
+    }
+
+    const candidates = this.app.vault.getMarkdownFiles()
+      .filter((file) => file.path !== sourceFile.path && !this.isExcluded(file))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    if (candidates.length === 0) {
+      new Notice("No eligible Markdown notes are available.");
+      return;
+    }
+
+    new FoundationSuggestionModal(this.app, candidates, (target) => {
+      this.applyFoundationSuggestion(active, sourceFile, anchor, target);
+    }).open();
+  }
+
+  private applyFoundationSuggestion(
+    active: ActiveEditorController,
+    sourceFile: TFile,
+    anchor: TextAnchor,
+    target: TFile
+  ): void {
+    if (this.app.workspace.getActiveFile()?.path !== sourceFile.path) {
+      new Notice("The active note changed before the link could be inserted.");
+      return;
+    }
+    if (this.isExcluded(target)) {
+      new Notice("The target note is now excluded.");
+      return;
+    }
+
+    active.controller.beginPluginTransaction();
+    let result: InsertWikilinkResult;
+    try {
+      result = insertVerifiedWikilink(
+        this.app,
+        active.view,
+        {
+          sourcePath: sourceFile.path,
+          anchorStart: anchor.start,
+          anchorEnd: anchor.end,
+          expectedText: anchor.text,
+          targetPath: target.path,
+          targetHeading: null,
+          displayText: anchor.text,
+          pathMode: this.settings.linkPathMode
+        },
+        (message) => {
+          new Notice(message);
+        }
+      );
+    } finally {
+      active.controller.endPluginTransaction();
+    }
+
+    if (!result.ok) {
+      new Notice(INSERTION_FAILURE_MESSAGES[result.code]);
+      return;
+    }
+
+    this.setStatus(`linked · ${target.basename}`);
+  }
+
+  private createRequestKey(
+    filePath: string,
+    documentVersion: number,
+    anchor: TextAnchor,
+    mode: SuggestionRequestKey["mode"]
+  ): SuggestionRequestKey {
+    return {
+      filePath,
+      documentVersion,
+      anchorStart: anchor.start,
+      anchorEnd: anchor.end,
+      anchorText: anchor.text,
+      contextHash: anchor.contextHash,
+      mode
+    };
+  }
+
+  private isExcluded(file: TFile): boolean {
+    return isFileExcluded(this.app.metadataCache, file, this.settings);
+  }
+
+  private setStatus(message: string): void {
+    this.statusBarElement?.setText(`Semantic Links: ${message}`);
+  }
+}

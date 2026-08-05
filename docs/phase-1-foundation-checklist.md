@@ -1,6 +1,6 @@
 # Phase 1 foundation checklist
 
-This checklist replaces the vague instruction to “scaffold the plugin.” It defines the exact foundation that must exist before lexical or semantic features are built.
+This checklist defines the foundation required before lexical or semantic retrieval work begins.
 
 ## 1. Repository files
 
@@ -31,142 +31,79 @@ LICENSE
 README.md
 ```
 
-Do not add:
+Do not add generated `main.js`, custom Obsidian type stubs, model or WASM binaries, index files, or manual release archives.
 
-```text
-main.js
-custom obsidian.d.ts
-model binaries
-WASM binaries
-index files
-manual release ZIP
-```
+## 2. Manifest
 
-## 2. Initial manifest
+Use the stable ID `semantic-links`, version `0.1.0`, and `minAppVersion` `1.13.0`. Keep the plugin desktop-only until the planned local runtime is proven on mobile.
 
-Use a stable ID from the first commit:
-
-```json
-{
-  "id": "semantic-links",
-  "name": "Semantic Links",
-  "version": "0.1.0",
-  "minAppVersion": "1.13.0",
-  "description": "Suggest contextually relevant internal links while you write using local lexical and semantic matching.",
-  "author": "Mohsin Osman",
-  "isDesktopOnly": true
-}
-```
-
-The minimum version should be reviewed against the APIs actually used before release. Do not lower it merely to increase compatibility.
+Review the minimum version against the APIs actually used before release. Do not lower it only to increase compatibility.
 
 ## 3. TypeScript and lint baseline
 
-- `strict: true`
-- official `obsidian` dependency
-- no `skipLibCheck` workaround for plugin source problems
-- no implicit `any`
-- no `as any`
+- strict TypeScript
+- official `obsidian` dependency matching the API used
+- no `skipLibCheck` workaround
+- no implicit or explicit `any` in plugin source
 - no unvalidated JSON casts
-- lint unsafe TypeScript rules as errors for `src/**`
-- test files may use narrower exceptions where justified
+- unsafe TypeScript lint rules are errors for `src/**`
+- test-only exceptions must be narrow and documented in lint configuration
 
-Treat these boundaries as `unknown`:
+Treat disk data, downloaded JSON, worker messages, model metadata, index manifests, and browser storage records as `unknown` until validated.
 
-- `loadData()` output
-- worker messages
-- model metadata
-- downloaded JSON
-- index manifests
-- browser storage records
-
-## 4. Settings schema from day one
+## 4. Settings schema
 
 Implement:
 
 - `settingsVersion`
-- defaults
-- field validators
-- migration function
-- traditional settings tab
+- safe defaults
+- field validation and normalization
+- explicit legacy migration
 - declarative `getSettingDefinitions()`
-- `Setting.setHeading()` for visual sections
+- `Setting.setHeading()` for sections
 
-The first schema should include all switches needed for the lexical-only fallback, even before semantic indexing exists.
+Because `minAppVersion` is 1.13.0, use the declarative settings API only. Add an imperative `display()` fallback only if the minimum version is later lowered below 1.13.0.
 
-## 5. Editor controller before retrieval
+## 5. Editor controller
 
-Build the per-editor state machine before implementing matching:
+Use one controller per editor view. It owns the debounce timer, request identity, active request keys, cancellation, composition state, plugin-transaction state, visible context, and undo/redo suppression.
 
-```ts
-interface EditorSuggestionController {
-  latestRequestId: number;
-  pendingKeys: Set<string>;
-  debounceTimer: number | null;
-  suppressUntil: number;
-  isComposing: boolean;
-  isApplyingPluginTransaction: boolean;
-  visibleContextHash: string | null;
-}
-```
-
-First tests should prove:
+Tests must prove:
 
 - duplicate triggers collapse into one request
+- a new context cancels stale work immediately, before its debounce expires
 - stale request IDs are ignored
-- changing files invalidates results
-- changing anchor text invalidates results
+- file, document, anchor, and cursor changes invalidate incompatible results
+- IME composition suppresses work
 - Undo suppresses automatic reopening
-- unload cancels timers
+- unload cancels timers and requests
 
-The controller may initially return mock suggestions. Retrieval comes later.
+The controller may initially return mock results. Retrieval comes later.
 
 ## 6. Atomic insertion contract
-
-Implement wikilink rendering and editor insertion as a pure, tested unit before the popup:
-
-```ts
-interface LinkInsertionRequest {
-  from: number;
-  to: number;
-  expectedText: string;
-  targetPath: string;
-  heading?: string;
-  displayText: string;
-}
-```
 
 Insertion must:
 
 1. revalidate the expected range
 2. resolve the target through Obsidian metadata APIs
-3. render the shortest valid link according to settings
+3. render the configured valid link path
 4. dispatch one CodeMirror transaction
 5. return success or a typed failure
-6. write feedback only after success
+6. write feedback only after dispatch succeeds
 
-## 7. Cheap lifecycle scaffold
+One Undo must restore the exact original text without reopening or reinserting the accepted suggestion.
 
-`onload()` registers only:
+## 7. Cheap lifecycle
 
-- commands
-- settings tab
-- editor extension
-- optional views
-- lifecycle cleanup
+`onload()` may register commands, settings, editor extensions, views, and cleanup. It must not scan the vault, open an index, download a model, initialise a runtime, or read every note.
 
-`workspace.onLayoutReady()` starts:
+Use `workspace.onLayoutReady()` for real index or background services when those services exist. Do not create empty service layers solely as placeholders; retain cancellation and cleanup at the owning lifecycle boundary.
 
-- index storage opening
-- vault listeners
-- metadata comparison
-- background queues
+Register only commands that perform useful work. Future command IDs do not need placeholder command-palette entries.
 
-The initial scaffold must include abort controllers and cleanup paths even while services are placeholders.
+## 8. CI
 
-## 8. CI before feature work
-
-The first PR must establish CI that runs:
+CI runs:
 
 ```text
 npm ci
@@ -177,36 +114,32 @@ npm run build
 node --check main.js
 ```
 
-CI must also fail when:
+It also rejects version disagreement, committed generated bundles, unsupported release assets, custom Obsidian type stubs, model/runtime binaries, and unreadable minified release output.
 
-- versions disagree
-- a generated `main.js` is committed
-- an unsupported release asset is configured
-- a custom Obsidian type stub appears
+## 9. Release workflow
 
-## 9. Release workflow before beta
-
-The release workflow must be present and reviewable before the first beta tag. It should:
+The workflow must:
 
 - run the same clean checks as CI
 - build from source
 - validate version metadata
 - attest each supported asset separately
-- create or update the matching unprefixed release tag
+- use an unprefixed tag matching the manifest version
 - upload only `main.js`, `manifest.json`, and `styles.css`
 
-Model/runtime downloads happen after installation and are not GitHub release assets.
+Model and runtime downloads happen after installation with explicit consent.
 
-## 10. Foundation exit criteria
+## 10. Exit criteria
 
-Phase 1 is complete only when:
+Phase 1 is complete when:
 
-- the plugin loads and unloads in a clean vault
-- the settings page is searchable on current Obsidian
-- strict type and lint checks pass without unsafe warnings
-- commands use local IDs
-- a mock suggestion can be accepted in one undoable transaction
+- the settings page is searchable on Obsidian 1.13+
+- strict type and lint checks pass
+- command IDs are short local identifiers
+- a mock suggestion is accepted in one undoable transaction
 - Undo does not immediately recreate or reopen it
-- duplicate editor events do not duplicate work
+- duplicate and stale editor work is suppressed
+- selection-only context changes are handled
 - CI passes from a clean dependency install
-- the release workflow contains the three-file allowlist and attestations
+- the release workflow contains the exact three-file allowlist and attestations
+- a manual Obsidian desktop walkthrough confirms load, unload, settings persistence, command behavior, and Undo

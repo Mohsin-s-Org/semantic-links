@@ -1,80 +1,68 @@
 # Master plan addendum
 
-This addendum updates the implementation and release portions of `semantic-links-master-plan.md` using lessons learned while taking Quran Autocomplete through Obsidian's automated review.
+This addendum updates the implementation and release portions of `semantic-links-master-plan.md`. Product, indexing, retrieval, ranking, and privacy goals remain unchanged.
 
-The product, indexing, retrieval, ranking, and privacy architecture in the master plan remains unchanged. The following implementation rules supersede conflicting details.
+## Repository structure
 
-## Repository structure changes
-
-The planned repository must not contain generated `main.js` or a custom `types/obsidian.d.ts`.
-
-Use:
+Keep generated `main.js`, custom Obsidian type stubs, model binaries, runtime binaries, and generated indexes out of source history.
 
 ```text
-semantic-links-obsidian/
-├─ .github/workflows/
-│  ├─ ci.yml
-│  └─ release.yml
-├─ docs/
-├─ scripts/
-├─ src/
-├─ tests/
-├─ manifest.json
-├─ versions.json
-├─ styles.css
-├─ package.json
-├─ package-lock.json
-├─ esbuild.config.mjs
-├─ eslint.config.mjs
-├─ tsconfig.json
-├─ LICENSE
-└─ README.md
+.github/workflows/
+docs/
+scripts/
+src/
+tests/
+manifest.json
+versions.json
+styles.css
+package.json
+package-lock.json
+esbuild.config.mjs
+eslint.config.mjs
+tsconfig.json
+LICENSE
+README.md
 ```
 
-`main.js` is generated in CI and attached to releases only.
+## Runtime delivery
 
-## Updated Phase 0 requirement
+Model weights, tokenizer files, and ONNX/WASM runtime files are not official release assets. Future downloads must happen after installation with explicit consent, pinned revisions, size and integrity checks, and recoverable failure handling.
 
-The runtime feasibility spike must prove the model and runtime can be downloaded after installation. The official Obsidian release cannot depend on additional GitHub release assets beyond `main.js`, `manifest.json`, and `styles.css`.
+A clean three-file install must start in lexical-only mode.
 
-Therefore:
+## Editor requirements
 
-- model weights, tokenizer files, ONNX WASM files, and worker support files are not official release assets
-- every download requires explicit consent
-- source revisions and integrity expectations are pinned
-- interrupted downloads can resume or restart safely
-- lexical suggestions remain fully functional without the model
-- a clean installation containing only the three supported plugin files can launch and reach lexical-only mode
-
-## Updated editor requirements
-
-The planned request-ID checks remain required, with these additions:
-
-- one per-editor controller owns all timers, pending keys, popup state, composition state, and suppression state
-- overlapping key, cursor, editor-change, and async events must deduplicate through the same request key
+- one controller per editor owns debounce, request identity, cancellation, composition, popup context, and suppression
+- document and selection changes share the same request path
+- a different request key cancels stale in-flight work immediately
 - suggestion acceptance is exactly one CodeMirror transaction
-- Undo restores the pre-link text and suppresses immediate reopening or reinsertion
-- redo must not duplicate feedback
-- plugin-generated transactions must not start a new automatic query until the editor has settled
-- IME composition and auto-paired punctuation must be tested explicitly
+- Undo restores the original text without immediate reopening or reinsertion
+- redo does not duplicate feedback
+- plugin transactions and IME composition suppress automatic work
 
-## Updated settings requirements
+## Settings requirements
 
-The settings implementation must:
+- use official Obsidian types matching the declared API level
+- validate `loadData()` from `unknown`
+- include `settingsVersion` and explicit migrations
+- repair invalid current-schema values without overwriting future-schema data
+- use `PluginSettingTab.getSettingDefinitions()` and `Setting.setHeading()`
 
-- use official Obsidian types
-- validate `loadData()` output from `unknown`
-- include `settingsVersion`
-- migrate saved settings explicitly
-- use `Setting.setHeading()` for settings sections
-- implement `PluginSettingTab.getSettingDefinitions()` so settings appear in search on Obsidian 1.13.0 and later
+The plugin requires Obsidian 1.13.0, so the declarative settings implementation is the single source of truth. Add a traditional `display()` fallback only if the minimum supported version is later reduced below 1.13.0.
 
-## Updated command requirements
+## Command requirements
 
-Commands shown to users remain prefixed automatically by Obsidian, but their IDs must be local:
+Use short local IDs because Obsidian applies the plugin namespace automatically. Register a command only when it performs useful work.
+
+Phase 1 registers:
 
 ```text
 show-suggestions
+```
+
+Later phases may add:
+
+```text
 rebuild-index
 pause-indexing
 show-index-status
@@ -84,31 +72,25 @@ clear-feedback
 open-diagnostics
 ```
 
-Do not use IDs such as `semantic-links-show-suggestions`.
-
-## Updated CI requirements
+## CI requirements
 
 CI runs on pull requests and pushes to `main`:
 
 1. `npm ci`
-2. strict type check
-3. ESLint with unsafe TypeScript rules enabled for plugin source
-4. unit tests
-5. integration tests
-6. production build
-7. `node --check main.js`
-8. version agreement validation
-9. generated-file policy validation
-10. release-asset allowlist validation
-11. clean-vault smoke test
+2. strict type checking
+3. unsafe TypeScript linting for plugin source
+4. unit and integration tests
+5. production build
+6. `node --check main.js`
+7. version and repository policy validation
+8. exact release-asset validation
+9. clean-vault packaging smoke test
 
-CI must reject handwritten Obsidian API stubs and committed generated bundles.
+CI rejects custom Obsidian type stubs, committed generated bundles, model/runtime binaries, unsupported assets, and minified release output.
 
-## Updated release requirements
+## Release requirements
 
-The official release tag exactly matches `manifest.json` and has no `v` prefix.
-
-The release contains only:
+The release tag exactly matches `manifest.json` without a `v` prefix. The release contains only:
 
 ```text
 main.js
@@ -116,16 +98,7 @@ manifest.json
 styles.css
 ```
 
-Do not attach:
-
-- a manual ZIP
-- checksums
-- model files
-- WASM files
-- documentation bundles
-- custom source archives
-
-The workflow creates a separate GitHub build-provenance attestation for each supported asset using permissions:
+Each asset receives a separate GitHub build-provenance attestation. The workflow uses:
 
 ```yaml
 permissions:
@@ -134,28 +107,19 @@ permissions:
   attestations: write
 ```
 
-The release build must reproduce `main.js` from the repository source byte-for-byte.
+## Phase ordering
 
-## Updated phase ordering
-
-Before the embedding feasibility spike becomes the dominant workstream, complete a small foundation slice:
+Complete this foundation before the embedding feasibility spike:
 
 1. official types and strict TypeScript
-2. settings schema and migration framework
+2. settings validation and migration
 3. per-editor request controller
 4. atomic mock wikilink insertion
-5. Undo/redo and event-deduplication tests
-6. CI and release allowlist
+5. undo, composition, selection-change, and deduplication tests
+6. CI and exact release allowlist
 
-Then run the local-model feasibility spike. This reduces the risk of debugging editor lifecycle, unsafe typing, packaging, and model runtime issues simultaneously.
+Then run the local-runtime feasibility spike, followed by the lexical index and real suggestions.
 
-## Updated definition of done
+## Definition of done
 
-Version 1.0 additionally requires:
-
-- settings are searchable on current Obsidian
-- no unsafe TypeScript warnings in plugin source
-- one Undo removes an accepted link without immediate recreation
-- official release contains only the three supported assets
-- all three assets have build-provenance attestations
-- a clean build reproduces the released `main.js`
+Version 1.0 additionally requires searchable settings, no unsafe TypeScript warnings, one-step Undo without reopening, a three-asset official release with provenance, reproducible readable output, and a successful manual Obsidian desktop walkthrough.

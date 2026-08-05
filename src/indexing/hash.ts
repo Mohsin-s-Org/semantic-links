@@ -15,9 +15,14 @@ export function createDocumentId(path: string): string {
 
 export function createChunkId(
   documentId: string,
-  startOffset: number,
-  endOffset: number,
-  text: string
+  headingPath: readonly string[],
+  embeddingText: string,
+  occurrence: number
 ): string {
-  return `chunk-${hashText(`${documentId}\u0000${startOffset}\u0000${endOffset}\u0000${text}`)}`;
+  return `chunk-${hashText(JSON.stringify([
+    documentId,
+    headingPath,
+    embeddingText,
+    occurrence
+  ]))}`;
 }

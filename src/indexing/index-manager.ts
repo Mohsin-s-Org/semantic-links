@@ -1,6 +1,7 @@
 import type { App, TFile } from "obsidian";
 import { isMarkdownFile } from "../lexical/vault-index.ts";
 import { topDotProducts } from "../retrieval/exact-search.ts";
+import { SemanticSearchWorker } from "../retrieval/semantic-search-worker.ts";
 import type { SemanticMatch } from "../retrieval/semantic-types.ts";
 import { isFileExcluded } from "../scope/exclusions.ts";
 import type { SemanticLinksSettings } from "../settings/types.ts";
@@ -27,9 +28,15 @@ import type {
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type StatusListener = (status: IndexStatus) => void;
+
 interface SemanticCandidate {
   chunk: IndexedChunk;
   document: IndexedDocument;
+}
+
+interface ScoredSemanticCandidate {
+  value: SemanticCandidate;
+  score: number;
 }
 
 export class PersistentIndexManager {
@@ -40,6 +47,9 @@ export class PersistentIndexManager {
   private readonly pendingPaths = new Set<string>();
   private readonly listeners = new Set<StatusListener>();
   private readonly lifecycle = new AbortController();
+  private readonly searchWorker = new SemanticSearchWorker();
+  private searchEntries: SemanticCandidate[] = [];
+  private searchDocumentOrdinals = new Map<string, number>();
   private operation: Promise<void> = Promise.resolve();
   private flushTimer: TimerHandle | null = null;
   private scopeTimer: TimerHandle | null = null;
@@ -81,7 +91,9 @@ export class PersistentIndexManager {
 
   async open(): Promise<void> {
     await this.enqueue(async () => {
-      if (this.opened) return;
+      if (this.opened) {
+        return;
+      }
       this.updateStatus("opening", "Opening the local semantic index.");
       let snapshot = await this.store.open();
       let message: string | undefined;
@@ -106,7 +118,9 @@ export class PersistentIndexManager {
       const livePaths = new Set(files.map((file) => file.path));
       let changed = false;
       for (const path of [...this.documents.keys()]) {
-        if (!livePaths.has(path)) changed = this.removeFromMemory(path) || changed;
+        if (!livePaths.has(path)) {
+          changed = this.removeFromMemory(path) || changed;
+        }
       }
       const pending = files.filter((file) => {
         if (isFileExcluded(this.app.metadataCache, file, this.getSettings())) {
@@ -151,13 +165,17 @@ export class PersistentIndexManager {
   }
 
   scheduleScopeRebuild(delayMs = 500): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     const settings = this.getSettings();
     const scope = createIndexScopeFingerprint(settings);
     const enabled = settings.semanticIndexingEnabled;
     const scopeChanged = scope !== this.scopeFingerprint;
     const enabledChanged = enabled !== this.indexingEnabled;
-    if (!scopeChanged && !enabledChanged) return;
+    if (!scopeChanged && !enabledChanged) {
+      return;
+    }
     this.scopeFingerprint = scope;
     this.indexingEnabled = enabled;
     this.pendingScopeReset ||= scopeChanged;
@@ -178,8 +196,11 @@ export class PersistentIndexManager {
     await this.enqueue(async () => {
       const previous = this.embeddingClient;
       this.embeddingClient = client;
-      if (previous !== client) previous?.dispose();
-      const modelChanged = client !== null && !modelsEqual(this.model, client.descriptor);
+      if (previous !== client) {
+        previous?.dispose();
+      }
+      const modelChanged = client !== null
+        && !modelsEqual(this.model, client.descriptor);
       if (clearVectors || modelChanged) {
         this.vectors.clear();
         this.model = client?.descriptor ?? null;
@@ -188,7 +209,9 @@ export class PersistentIndexManager {
         this.updateReadyStatus();
         return;
       }
-      if (client !== null) await this.embedMissingChunks(this.lifecycle.signal);
+      if (client !== null) {
+        await this.embedMissingChunks(this.lifecycle.signal);
+      }
       if (clearVectors || modelChanged || client !== null) {
         await this.persistCurrentGeneration();
       }
@@ -196,37 +219,24 @@ export class PersistentIndexManager {
     });
   }
 
-  searchSemantic(
+  async searchSemantic(
     query: Float32Array,
     sourcePath: string,
-    limit = 40
-  ): SemanticMatch[] {
-    if (this.model === null || query.length !== this.model.dimensions || limit < 1) {
+    limit: number,
+    signal: AbortSignal
+  ): Promise<SemanticMatch[]> {
+    if (
+      this.model === null
+      || query.length !== this.model.dimensions
+      || limit < 1
+      || signal.aborted
+    ) {
       return [];
     }
-    const topChunks = topDotProducts(
-      query,
-      this.semanticCandidates(sourcePath),
-      40
-    );
-    const grouped = new Map<string, SemanticMatch>();
-    for (const { value, score } of topChunks) {
-      const heading = value.chunk.headingPath.at(-1) ?? null;
-      const key = `${value.document.path}\u0000${heading ?? ""}`;
-      const existing = grouped.get(key);
-      if (existing === undefined || score > existing.similarity) {
-        grouped.set(key, {
-          targetPath: value.document.path,
-          targetTitle: value.document.title,
-          targetHeading: heading,
-          similarity: score,
-          preview: value.chunk.textPreview
-        });
-      }
-    }
-    return [...grouped.values()]
-      .sort((left, right) => right.similarity - left.similarity)
-      .slice(0, limit);
+    const scored = this.searchWorker.available
+      ? await this.searchWorkerMatches(query, sourcePath, signal)
+      : topDotProducts(query, this.semanticCandidates(sourcePath), 40);
+    return groupMatches(scored, limit);
   }
 
   async rebuild(): Promise<void> {
@@ -250,11 +260,15 @@ export class PersistentIndexManager {
       await this.enqueue(() => this.applyPendingSettingsChange());
     }
     await this.operation;
-    if (this.pendingPaths.size > 0) await this.flushPending();
+    if (this.pendingPaths.size > 0) {
+      await this.flushPending();
+    }
   }
 
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     this.disposed = true;
     this.lifecycle.abort();
     this.cancelScheduledFlush();
@@ -263,8 +277,22 @@ export class PersistentIndexManager {
     this.listeners.clear();
     this.embeddingClient?.dispose();
     this.embeddingClient = null;
-    this.clearMemory();
+    this.searchWorker.dispose();
+    this.clearMemory(false);
     this.status = createStatus("closed", "Index is closed.");
+  }
+
+  private async searchWorkerMatches(
+    query: Float32Array,
+    sourcePath: string,
+    signal: AbortSignal
+  ): Promise<ScoredSemanticCandidate[]> {
+    const excluded = this.searchDocumentOrdinals.get(sourcePath) ?? -1;
+    const results = await this.searchWorker.search(query, excluded, 40, signal);
+    return results.flatMap(({ row, score }) => {
+      const value = this.searchEntries[row];
+      return value === undefined ? [] : [{ value, score }];
+    });
   }
 
   private *semanticCandidates(sourcePath: string): Iterable<{
@@ -276,10 +304,59 @@ export class PersistentIndexManager {
       const document = chunk === undefined
         ? undefined
         : this.documentsById.get(chunk.documentId);
-      if (chunk !== undefined && document !== undefined && document.path !== sourcePath) {
+      if (
+        chunk !== undefined
+        && document !== undefined
+        && document.path !== sourcePath
+      ) {
         yield { value: { chunk, document }, vector };
       }
     }
+  }
+
+  private refreshSearchIndex(): void {
+    const dimensions = this.model?.dimensions ?? 0;
+    if (dimensions < 1) {
+      this.searchEntries = [];
+      this.searchDocumentOrdinals.clear();
+      this.searchWorker.update(new Float32Array(), new Int32Array(), 0);
+      return;
+    }
+
+    const entries: SemanticCandidate[] = [];
+    const vectorRows: Float32Array[] = [];
+    const documentRows: number[] = [];
+    const documentOrdinals = new Map<string, number>();
+
+    for (const [chunkId, vector] of this.vectors) {
+      const chunk = this.chunks.get(chunkId);
+      const document = chunk === undefined
+        ? undefined
+        : this.documentsById.get(chunk.documentId);
+      if (
+        chunk === undefined
+        || document === undefined
+        || vector.length !== dimensions
+      ) {
+        continue;
+      }
+      let ordinal = documentOrdinals.get(document.path);
+      if (ordinal === undefined) {
+        ordinal = documentOrdinals.size;
+        documentOrdinals.set(document.path, ordinal);
+      }
+      entries.push({ chunk, document });
+      vectorRows.push(vector);
+      documentRows.push(ordinal);
+    }
+
+    const matrix = new Float32Array(vectorRows.length * dimensions);
+    vectorRows.forEach((vector, row) => {
+      matrix.set(vector, row * dimensions);
+    });
+    this.searchEntries = entries;
+    this.searchDocumentOrdinals = documentOrdinals;
+    this.searchWorker.update(matrix, new Int32Array(documentRows), dimensions);
   }
 
   private async applyPendingSettingsChange(): Promise<void> {
@@ -287,7 +364,9 @@ export class PersistentIndexManager {
     const enabledChanged = this.pendingEnabledChange;
     this.pendingScopeReset = false;
     this.pendingEnabledChange = false;
-    if (!this.opened) return;
+    if (!this.opened) {
+      return;
+    }
     if (scopeChanged) {
       if (this.indexingEnabled) {
         await this.rebuildInternal();
@@ -312,7 +391,9 @@ export class PersistentIndexManager {
     const files = this.sortedMarkdownFiles();
     const livePaths = new Set(files.map((file) => file.path));
     for (const path of [...this.documents.keys()]) {
-      if (!livePaths.has(path)) this.removeFromMemory(path);
+      if (!livePaths.has(path)) {
+        this.removeFromMemory(path);
+      }
     }
     await this.processFiles(files, true, "Rebuilding the semantic index", true);
   }
@@ -369,7 +450,9 @@ export class PersistentIndexManager {
     });
 
     for (const file of files) {
-      if (this.shouldStop()) return;
+      if (this.shouldStop()) {
+        return;
+      }
       const previous = this.documents.get(file.path);
       const result = await parseIndexDocument(
         this.app,
@@ -377,12 +460,17 @@ export class PersistentIndexManager {
         this.getSettings(),
         previous?.id
       );
-      if (this.shouldStop()) return;
+      if (this.shouldStop()) {
+        return;
+      }
       processed += 1;
       if (result === null) {
         changed = this.removeFromMemory(file.path) || changed;
       } else if (result !== undefined) {
-        if (!replaceUnchanged && canReuseDocument(previous, result.document.contentHash)) {
+        if (
+          !replaceUnchanged
+          && canReuseDocument(previous, result.document.contentHash)
+        ) {
           previous.modifiedAt = result.document.modifiedAt;
           changed = true;
         } else {
@@ -395,17 +483,23 @@ export class PersistentIndexManager {
         processedCount: processed,
         queuedCount: files.length - processed
       });
-      if (processed % 20 === 0) await yieldToEventLoop();
+      if (processed % 20 === 0) {
+        await yieldToEventLoop();
+      }
     }
 
     await this.embedMissingChunks(signal);
-    if (changed) await this.persistCurrentGeneration();
+    if (changed) {
+      await this.persistCurrentGeneration();
+    }
     this.updateReadyStatus();
   }
 
   private async embedMissingChunks(signal: AbortSignal): Promise<void> {
     const client = this.embeddingClient;
-    if (client === null || this.shouldStop()) return;
+    if (client === null || this.shouldStop()) {
+      return;
+    }
     const inputs = [...this.chunks.values()]
       .filter((chunk) => !this.vectors.has(chunk.id))
       .map((chunk) => ({ id: chunk.id, text: chunk.embeddingText }));
@@ -421,7 +515,9 @@ export class PersistentIndexManager {
       }
     );
     this.model = client.descriptor;
-    for (const [id, vector] of result.vectorsById) this.vectors.set(id, vector);
+    for (const [id, vector] of result.vectorsById) {
+      this.vectors.set(id, vector);
+    }
   }
 
   private replaceDocument(parsed: ParsedIndexDocument): void {
@@ -435,12 +531,16 @@ export class PersistentIndexManager {
     }
     this.documents.set(parsed.document.path, parsed.document);
     this.documentsById.set(parsed.document.id, parsed.document);
-    for (const chunk of parsed.chunks) this.chunks.set(chunk.id, chunk);
+    for (const chunk of parsed.chunks) {
+      this.chunks.set(chunk.id, chunk);
+    }
   }
 
   private removeFromMemory(path: string): boolean {
     const document = this.documents.get(path);
-    if (document === undefined) return false;
+    if (document === undefined) {
+      return false;
+    }
     this.documents.delete(path);
     this.documentsById.delete(document.id);
     for (const id of document.chunkIds) {
@@ -454,6 +554,7 @@ export class PersistentIndexManager {
     const written = await this.store.write(this.createSnapshot(Date.now()));
     this.generation = written.manifest.generation;
     this.lastCompletedAt = written.manifest.lastCompletedAt;
+    this.refreshSearchIndex();
   }
 
   private createSnapshot(completedAt: number): IndexSnapshot {
@@ -461,14 +562,19 @@ export class PersistentIndexManager {
     const dimensions = model?.dimensions ?? 0;
     const chunks = [...this.chunks.values()]
       .sort((left, right) => left.id.localeCompare(right.id));
-    const rows: number[] = [];
+    const vectorCount = dimensions === 0
+      ? 0
+      : chunks.reduce((count, chunk) => {
+          return count + (this.vectors.has(chunk.id) ? 1 : 0);
+        }, 0);
+    const vectors = new Float32Array(vectorCount * dimensions);
     let vectorRow = 0;
     const storedChunks = chunks.map((chunk) => {
       const vector = this.vectors.get(chunk.id);
       if (vector === undefined || dimensions === 0) {
         return { ...chunk, vectorRow: -1 };
       }
-      rows.push(...vector);
+      vectors.set(vector, vectorRow * dimensions);
       return { ...chunk, vectorRow: vectorRow++ };
     });
     return {
@@ -486,7 +592,7 @@ export class PersistentIndexManager {
       },
       documents: [...this.documents.values()],
       chunks: storedChunks,
-      vectors: new Float32Array(rows)
+      vectors
     };
   }
 
@@ -504,19 +610,28 @@ export class PersistentIndexManager {
       this.chunks.set(chunk.id, chunk);
       if (chunk.vectorRow >= 0 && dimensions > 0) {
         const start = chunk.vectorRow * dimensions;
-        this.vectors.set(chunk.id, snapshot.vectors.slice(start, start + dimensions));
+        this.vectors.set(
+          chunk.id,
+          snapshot.vectors.slice(start, start + dimensions)
+        );
       }
     }
+    this.refreshSearchIndex();
   }
 
-  private clearMemory(): void {
+  private clearMemory(refreshWorker = true): void {
     this.documents.clear();
     this.documentsById.clear();
     this.chunks.clear();
     this.vectors.clear();
+    this.searchEntries = [];
+    this.searchDocumentOrdinals.clear();
     this.generation = 0;
     this.lastCompletedAt = null;
     this.model = null;
+    if (refreshWorker) {
+      this.searchWorker.update(new Float32Array(), new Int32Array(), 0);
+    }
   }
 
   private canIndex(): boolean {
@@ -530,9 +645,11 @@ export class PersistentIndexManager {
   private isCompatible(snapshot: IndexSnapshot): boolean {
     return snapshot.manifest.vaultFingerprint === this.vaultFingerprint
       && snapshot.manifest.scopeFingerprint === this.scopeFingerprint
-      && (this.embeddingClient === null
+      && (
+        this.embeddingClient === null
         || snapshot.manifest.model === null
-        || modelsEqual(snapshot.manifest.model, this.embeddingClient.descriptor));
+        || modelsEqual(snapshot.manifest.model, this.embeddingClient.descriptor)
+      );
   }
 
   private updateReadyStatus(message?: string): void {
@@ -571,7 +688,9 @@ export class PersistentIndexManager {
       vectorCount: this.vectors.size,
       ...patch
     };
-    for (const listener of this.listeners) listener(this.currentStatus);
+    for (const listener of this.listeners) {
+      listener(this.currentStatus);
+    }
   }
 
   private enqueue(task: () => Promise<void>): Promise<void> {
@@ -582,7 +701,9 @@ export class PersistentIndexManager {
         } catch (error) {
           this.updateStatus(
             "error",
-            error instanceof Error ? error.message : "Semantic index operation failed."
+            error instanceof Error
+              ? error.message
+              : "Semantic index operation failed."
           );
           throw error;
         }
@@ -605,6 +726,30 @@ export class PersistentIndexManager {
       this.scopeTimer = null;
     }
   }
+}
+
+function groupMatches(
+  candidates: readonly ScoredSemanticCandidate[],
+  limit: number
+): SemanticMatch[] {
+  const grouped = new Map<string, SemanticMatch>();
+  for (const { value, score } of candidates) {
+    const heading = value.chunk.headingPath.at(-1) ?? null;
+    const key = `${value.document.path}\u0000${heading ?? ""}`;
+    const existing = grouped.get(key);
+    if (existing === undefined || score > existing.similarity) {
+      grouped.set(key, {
+        targetPath: value.document.path,
+        targetTitle: value.document.title,
+        targetHeading: heading,
+        similarity: score,
+        preview: value.chunk.textPreview
+      });
+    }
+  }
+  return [...grouped.values()]
+    .sort((left, right) => right.similarity - left.similarity)
+    .slice(0, limit);
 }
 
 function createStatus(phase: IndexStatus["phase"], message: string): IndexStatus {

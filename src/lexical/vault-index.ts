@@ -1,12 +1,15 @@
 import {
   TFile,
-  getAllTags,
-  type App,
-  type CachedMetadata
+  type App
 } from "obsidian";
+import {
+  createIndexScopeFingerprint
+} from "../indexing/scope-fingerprint.ts";
+import {
+  extractIndexedNoteMetadata
+} from "../indexing/note-metadata.ts";
 import { isFileExcluded } from "../scope/exclusions.ts";
 import type { SemanticLinksSettings } from "../settings/types.ts";
-import { isRecord } from "../utils/validation.ts";
 import { LexicalIndex } from "./index.ts";
 import { stripMarkdownForLexicalIndex } from "./text.ts";
 import type {
@@ -31,7 +34,7 @@ export class LexicalVaultIndex {
     private readonly app: App,
     private readonly getSettings: () => SemanticLinksSettings
   ) {
-    this.scopeSignature = createScopeSignature(getSettings());
+    this.scopeSignature = createIndexScopeFingerprint(getSettings());
   }
 
   get ready(): boolean {
@@ -107,13 +110,14 @@ export class LexicalVaultIndex {
     }
     const timer = globalThis.setTimeout(() => {
       this.refreshTimers.delete(path);
-      void this.refresh(file, path, version, this.generation);
+      void this.refresh(file, path, version, this.generation)
+        .catch(() => undefined);
     }, Math.max(0, delayMs));
     this.refreshTimers.set(path, timer);
   }
 
   scheduleScopeRebuild(delayMs = 500): void {
-    const signature = createScopeSignature(this.getSettings());
+    const signature = createIndexScopeFingerprint(this.getSettings());
     if (this.disposed || signature === this.scopeSignature) {
       return;
     }
@@ -158,7 +162,7 @@ export class LexicalVaultIndex {
     }
     this.rebuildTimer = globalThis.setTimeout(() => {
       this.rebuildTimer = null;
-      void this.rebuild();
+      void this.rebuild().catch(() => undefined);
     }, Math.max(0, delayMs));
   }
 
@@ -191,23 +195,29 @@ export class LexicalVaultIndex {
       return null;
     }
 
+    let content: string;
     try {
-      const content = await this.app.vault.cachedRead(file);
-      const cache = this.app.metadataCache.getFileCache(file);
-      const frontmatter: unknown = cache?.frontmatter;
-      const title = readFrontmatterTitle(frontmatter) ?? file.basename;
-      return {
-        path: file.path,
-        title,
-        basename: file.basename,
-        aliases: readFrontmatterAliases(frontmatter),
-        headings: readHeadings(cache),
-        tags: cache === null ? [] : (getAllTags(cache) ?? []),
-        body: stripMarkdownForLexicalIndex(content)
-      };
+      content = await this.app.vault.cachedRead(file);
     } catch {
       return undefined;
     }
+    if (isFileExcluded(this.app.metadataCache, file, this.getSettings())) {
+      return null;
+    }
+
+    const metadata = extractIndexedNoteMetadata(
+      file,
+      this.app.metadataCache.getFileCache(file)
+    );
+    return {
+      path: file.path,
+      title: metadata.title,
+      basename: file.basename,
+      aliases: metadata.aliases,
+      headings: metadata.headings,
+      tags: metadata.tags,
+      body: stripMarkdownForLexicalIndex(content)
+    };
   }
 
   private shouldStop(generation: number, signal?: AbortSignal): boolean {
@@ -222,51 +232,6 @@ export class LexicalVaultIndex {
     }
     this.refreshTimers.clear();
   }
-}
-
-function createScopeSignature(settings: SemanticLinksSettings): string {
-  return JSON.stringify([
-    [...settings.excludedFolders].sort(),
-    [...settings.excludedFiles].sort(),
-    [...settings.excludedTags].sort(),
-    [...settings.excludedProperties].sort()
-  ]);
-}
-
-function readFrontmatterTitle(value: unknown): string | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const title = value["title"];
-  return typeof title === "string" && title.trim().length > 0
-    ? title.trim()
-    : null;
-}
-
-function readFrontmatterAliases(value: unknown): string[] {
-  if (!isRecord(value)) {
-    return [];
-  }
-  const aliases = value["aliases"] ?? value["alias"];
-  if (typeof aliases === "string") {
-    return aliases.trim().length > 0 ? [aliases.trim()] : [];
-  }
-  if (!Array.isArray(aliases)) {
-    return [];
-  }
-  return [...new Set(aliases
-    .filter((alias): alias is string => typeof alias === "string")
-    .map((alias) => alias.trim())
-    .filter((alias) => alias.length > 0))];
-}
-
-function readHeadings(cache: CachedMetadata | null): Array<{ text: string; level: number }> {
-  return (cache?.headings ?? [])
-    .map((heading) => ({
-      text: heading.heading.trim(),
-      level: heading.level
-    }))
-    .filter((heading) => heading.text.length > 0);
 }
 
 function yieldToEventLoop(): Promise<void> {

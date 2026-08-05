@@ -3,6 +3,7 @@ main.js
 *.map
 coverage/
 .DS_Store
+.build/
 
 # Obsidian local data and generated indexes
 data.json

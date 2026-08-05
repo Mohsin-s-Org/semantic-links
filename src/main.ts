@@ -82,7 +82,6 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
   private readonly lifecycle = new AbortController();
   private lexicalIndex: LexicalVaultIndex | null = null;
   private statusBarElement: HTMLElement | null = null;
-  private persistentEventsRegistered = false;
 
   override async onload(): Promise<void> {
     const savedData: unknown = await this.loadData();
@@ -146,7 +145,9 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
     });
 
     this.app.workspace.onLayoutReady(() => {
-      void this.initializeIndexes();
+      void this.initializeIndexes().catch(() => {
+        new Notice("Semantic Links could not finish preparing its local indexes.");
+      });
     });
   }
 
@@ -208,10 +209,10 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
   }
 
   private async initializeIndexes(): Promise<void> {
-    await Promise.all([
-      this.initializeLexicalIndex(),
-      this.initializePersistentIndex()
-    ]);
+    await this.initializeLexicalIndex();
+    if (!this.lifecycle.signal.aborted) {
+      await this.initializePersistentIndex();
+    }
   }
 
   private async initializeLexicalIndex(): Promise<void> {
@@ -296,10 +297,6 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
   }
 
   private registerPersistentIndexEvents(manager: PersistentIndexManager): void {
-    if (this.persistentEventsRegistered) {
-      return;
-    }
-    this.persistentEventsRegistered = true;
     this.registerEvent(this.app.vault.on("create", (file) => {
       if (isMarkdownFile(file)) {
         manager.scheduleRefresh(file);
@@ -314,9 +311,10 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
       manager.scheduleRemove(file.path);
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      manager.scheduleRemove(oldPath);
       if (isMarkdownFile(file)) {
-        manager.scheduleRefresh(file);
+        manager.scheduleRename(file, oldPath);
+      } else {
+        manager.scheduleRemove(oldPath);
       }
     }));
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {

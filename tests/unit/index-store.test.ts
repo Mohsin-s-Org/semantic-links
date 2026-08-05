@@ -90,6 +90,7 @@ test("round-trips validated documents, chunks and row-major vectors", async () =
 
   assert.equal(written.manifest.dirty, false);
   assert.equal(opened.manifest.generation, 1);
+  assert.equal(opened.manifest.scopeFingerprint, "scope");
   assert.equal(opened.documents[0]?.path, "Notes/first.md");
   assert.equal(opened.chunks[0]?.vectorRow, 0);
   assert.deepEqual([...opened.vectors], [0.25, 0.75]);
@@ -129,7 +130,7 @@ function createStore(adapter: MemoryAdapter): PersistentIndexStore {
   return new PersistentIndexStore(
     adapter,
     "plugin/index",
-    () => createEmptyIndexManifest("0.1.0", "vault")
+    () => createEmptyIndexManifest("0.1.0", "vault", "scope")
   );
 }
 
@@ -138,7 +139,7 @@ function createSnapshot(generation: number, name: string): IndexSnapshot {
   const chunkId = `chunk-${name}`;
   return {
     manifest: {
-      ...createEmptyIndexManifest("0.1.0", "vault"),
+      ...createEmptyIndexManifest("0.1.0", "vault", "scope"),
       model: {
         id: "test/model",
         revision: "fixed",

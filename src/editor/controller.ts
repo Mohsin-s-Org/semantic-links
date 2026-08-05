@@ -53,13 +53,16 @@ export class EditorSuggestionController {
   private lastCompletedKey: string | null = null;
   private readonly pendingKeys = new Set<string>();
   private readonly abortControllers = new Map<number, AbortController>();
+  private readonly scheduler: ControllerScheduler;
   private suppressedUntil = 0;
   private composing = false;
   private applyingPluginTransaction = false;
   private visibleContextHash: string | null = null;
   private disposed = false;
 
-  constructor(private readonly scheduler: ControllerScheduler = browserScheduler) {}
+  constructor(scheduler: ControllerScheduler = browserScheduler) {
+    this.scheduler = scheduler;
+  }
 
   schedule(
     key: SuggestionRequestKey,

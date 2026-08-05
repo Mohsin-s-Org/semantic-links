@@ -236,9 +236,10 @@ export default class SemanticLinksPlugin extends Plugin {
       return;
     }
 
+    const documentVersion = active.controller.documentVersion;
     const requestKey = this.createRequestKey(
       sourceFile.path,
-      0,
+      documentVersion,
       context,
       "manual"
     );
@@ -248,7 +249,7 @@ export default class SemanticLinksPlugin extends Plugin {
         active.view,
         active.controller,
         ticket,
-        0,
+        documentVersion,
         true,
         true
       );

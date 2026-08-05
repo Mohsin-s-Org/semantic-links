@@ -21,6 +21,7 @@ if (prepared.status !== 0) {
     "--external:@codemirror/state",
     "--external:@codemirror/view",
     "--alias:@semantic-links/transformers=./.build/transformers/transformers.web.js",
+    "--alias:@semantic-links/runtime-integrity=./.build/transformers/runtime-integrity.js",
     "--outfile=main.js",
     "--log-level=info"
   ];

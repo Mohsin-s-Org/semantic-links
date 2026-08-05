@@ -66,7 +66,7 @@ export class LexicalIndex {
     this.primaryLabelPostings.clear();
   }
 
-  hasExactTitleOrAlias(value: string): boolean {
+  hasExactLabel(value: string): boolean {
     const normalized = normalizeLexicalText(value);
     return normalized.length > 0 && this.primaryLabelPostings.has(normalized);
   }

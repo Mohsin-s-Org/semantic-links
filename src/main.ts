@@ -165,7 +165,6 @@ export default class SemanticLinksPlugin extends Plugin {
     controller: EditorSuggestionController,
     documentVersion: number
   ): void {
-    controller.hideVisibleSuggestions();
     hideSuggestions(view);
 
     const lexicalIndex = this.lexicalIndex;

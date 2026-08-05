@@ -18,6 +18,7 @@ import {
   LOCAL_MODEL_ID,
   LOCAL_MODEL_REVISION
 } from "./model-config.ts";
+import { createVerifiedFetch, onnxWasmPaths } from "./verified-fetch.ts";
 
 export type ModelProgressListener = (message: string, percent: number | null) => void;
 
@@ -38,7 +39,7 @@ export class LocalEmbeddingClient implements EmbeddingClient {
   ): Promise<LocalEmbeddingClient> {
     configureEnvironment(allowDownload);
     onProgress?.(
-      allowDownload ? "Preparing the local semantic model." : "Loading the cached semantic model.",
+      allowDownload ? "Preparing the verified local semantic model." : "Loading the cached semantic model.",
       null
     );
     const extractor = await pipeline("feature-extraction", LOCAL_MODEL_ID, {
@@ -109,10 +110,12 @@ function configureEnvironment(allowDownload: boolean): void {
   env.useWasmCache = true;
   env.cacheKey = LOCAL_MODEL_CACHE_KEY;
   env.logLevel = LogLevel.ERROR;
+  env.fetch = createVerifiedFetch();
   const wasm = env.backends.onnx.wasm ?? {};
   wasm.proxy = true;
   wasm.simd = true;
   wasm.numThreads = 0;
+  wasm.wasmPaths = onnxWasmPaths();
   env.backends.onnx.wasm = wasm;
 }
 
@@ -160,7 +163,7 @@ function formatStatus(status: string | undefined): string {
     case "initiate": return "Preparing";
     case "download": return "Downloading";
     case "progress": return "Downloading";
-    case "done": return "Cached";
+    case "done": return "Verified and cached";
     case "ready": return "Ready";
     default: return "Preparing model";
   }

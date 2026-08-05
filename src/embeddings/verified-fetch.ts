@@ -30,12 +30,19 @@ const MODEL_ASSETS: Readonly<Record<string, AssetExpectation>> = Object.freeze({
 });
 
 export function createVerifiedFetch(
+  lifecycleSignal: AbortSignal,
   fetcher: typeof globalThis.fetch = globalThis.fetch.bind(globalThis)
 ): typeof globalThis.fetch {
   return async (input, init) => {
+    if (lifecycleSignal.aborted) {
+      throw abortError(lifecycleSignal);
+    }
     const url = requestUrl(input);
     const expectation = expectationFor(url);
-    const response = await fetcher(input, init);
+    const response = await fetcher(input, {
+      ...init,
+      signal: lifecycleSignal
+    });
     if (!response.ok || expectation === null || requestMethod(input, init) === "HEAD") {
       return response;
     }
@@ -166,6 +173,12 @@ function requestMethod(input: RequestInfo | URL, init?: RequestInit): string {
     return init.method.toUpperCase();
   }
   return input instanceof Request ? input.method.toUpperCase() : "GET";
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The model download was cancelled.", "AbortError");
 }
 
 function isSafari(): boolean {

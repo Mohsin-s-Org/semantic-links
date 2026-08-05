@@ -121,7 +121,7 @@ function readSemanticToggle(record: Record<string, unknown>): boolean {
 
 function normalizeTags(tags: string[]): string[] {
   return [...new Set(tags
-    .map((tag) => tag.replace(/^#/u, ""))
+    .map((tag) => tag.replace(/^#/u, "").toLocaleLowerCase())
     .filter((tag) => tag.length > 0))];
 }
 

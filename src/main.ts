@@ -2,9 +2,17 @@ import type { EditorView } from "@codemirror/view";
 import {
   Notice,
   Plugin,
-  type TFile
+  normalizePath,
+  type TFile,
+  type WorkspaceLeaf
 } from "obsidian";
-import { SHOW_SUGGESTIONS_COMMAND_ID } from "./constants.ts";
+import {
+  DELETE_INDEX_COMMAND_ID,
+  INDEX_STATUS_VIEW_TYPE,
+  REBUILD_INDEX_COMMAND_ID,
+  SHOW_INDEX_STATUS_COMMAND_ID,
+  SHOW_SUGGESTIONS_COMMAND_ID
+} from "./constants.ts";
 import type {
   EditorSuggestionController,
   SuggestionRequestTicket
@@ -32,6 +40,8 @@ import {
   showSuggestions,
   type SuggestionPopupState
 } from "./editor/suggestion-popup.ts";
+import { hashText } from "./indexing/hash.ts";
+import { PersistentIndexManager } from "./indexing/index-manager.ts";
 import { meaningfulLexicalTokens } from "./lexical/text.ts";
 import type { LexicalSuggestion } from "./lexical/types.ts";
 import {
@@ -43,6 +53,15 @@ import { createDefaultSettings } from "./settings/defaults.ts";
 import { loadAndMigrateSettings } from "./settings/schema.ts";
 import { SemanticLinksSettingTab } from "./settings/settings-tab.ts";
 import type { SemanticLinksSettings } from "./settings/types.ts";
+import {
+  createEmptyIndexManifest,
+  PersistentIndexStore
+} from "./storage/index-store.ts";
+import { DeleteIndexModal } from "./ui/delete-index-modal.ts";
+import {
+  IndexStatusView,
+  type IndexStatusViewHost
+} from "./views/index-status-view.ts";
 
 const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
   "invalid-range": "The selected text range is no longer valid.",
@@ -54,13 +73,15 @@ const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
   "dispatch-failed": "The editor rejected the link transaction."
 };
 
-export default class SemanticLinksPlugin extends Plugin {
+export default class SemanticLinksPlugin extends Plugin implements IndexStatusViewHost {
   override settings: SemanticLinksSettings = createDefaultSettings();
+  indexManager: PersistentIndexManager | null = null;
 
   private readonly controllers = new EditorControllerRegistry();
   private readonly lifecycle = new AbortController();
   private lexicalIndex: LexicalVaultIndex | null = null;
   private statusBarElement: HTMLElement | null = null;
+  private persistentEventsRegistered = false;
 
   override async onload(): Promise<void> {
     const savedData: unknown = await this.loadData();
@@ -74,6 +95,7 @@ export default class SemanticLinksPlugin extends Plugin {
     this.addSettingTab(new SemanticLinksSettingTab(this.app, this));
     this.statusBarElement = this.addStatusBarItem();
     this.setStatus("loading");
+    this.registerView(INDEX_STATUS_VIEW_TYPE, (leaf) => new IndexStatusView(leaf, this));
 
     this.registerEditorExtension(createControllerExtension(
       this.controllers,
@@ -100,9 +122,30 @@ export default class SemanticLinksPlugin extends Plugin {
         this.openSuggestionPopup();
       }
     });
+    this.addCommand({
+      id: SHOW_INDEX_STATUS_COMMAND_ID,
+      name: "Show index status",
+      callback: () => {
+        void this.openIndexStatus();
+      }
+    });
+    this.addCommand({
+      id: REBUILD_INDEX_COMMAND_ID,
+      name: "Rebuild semantic index",
+      callback: () => {
+        void this.rebuildSemanticIndex();
+      }
+    });
+    this.addCommand({
+      id: DELETE_INDEX_COMMAND_ID,
+      name: "Delete local semantic index",
+      callback: () => {
+        this.requestSemanticIndexDeletion();
+      }
+    });
 
     this.app.workspace.onLayoutReady(() => {
-      void this.initializeLexicalIndex();
+      void this.initializeIndexes();
     });
   }
 
@@ -111,12 +154,63 @@ export default class SemanticLinksPlugin extends Plugin {
     this.controllers.dispose();
     this.lexicalIndex?.dispose();
     this.lexicalIndex = null;
+    const manager = this.indexManager;
+    this.indexManager = null;
+    if (manager !== null) {
+      void manager.flush().catch(() => undefined).finally(() => {
+        manager.dispose();
+      });
+    }
+    this.app.workspace.detachLeavesOfType(INDEX_STATUS_VIEW_TYPE);
     this.statusBarElement = null;
   }
 
   async saveSettings(): Promise<void> {
     this.lexicalIndex?.scheduleScopeRebuild();
+    this.indexManager?.scheduleScopeRebuild();
     await this.saveData(this.settings);
+  }
+
+  async rebuildSemanticIndex(): Promise<void> {
+    const manager = this.indexManager;
+    if (manager === null) {
+      new Notice("The semantic index is not ready yet.");
+      return;
+    }
+    if (!this.settings.semanticIndexingEnabled) {
+      new Notice("Enable semantic indexing in Semantic Links settings first.");
+      return;
+    }
+    try {
+      await manager.rebuild();
+      new Notice("Semantic Links rebuilt the local index.");
+    } catch {
+      new Notice("Semantic Links could not rebuild the local index. Open the index status view for details.");
+    }
+  }
+
+  requestSemanticIndexDeletion(): void {
+    const manager = this.indexManager;
+    if (manager === null) {
+      new Notice("The semantic index is not ready yet.");
+      return;
+    }
+    new DeleteIndexModal(this.app, () => {
+      void manager.deleteIndex()
+        .then(() => {
+          new Notice("Semantic Links deleted the local index.");
+        })
+        .catch(() => {
+          new Notice("Semantic Links could not delete the local index.");
+        });
+    }).open();
+  }
+
+  private async initializeIndexes(): Promise<void> {
+    await Promise.all([
+      this.initializeLexicalIndex(),
+      this.initializePersistentIndex()
+    ]);
   }
 
   private async initializeLexicalIndex(): Promise<void> {
@@ -133,6 +227,44 @@ export default class SemanticLinksPlugin extends Plugin {
     }
 
     this.setStatus(`ready · ${lexicalIndex.size} notes`);
+  }
+
+  private async initializePersistentIndex(): Promise<void> {
+    if (this.lifecycle.signal.aborted || this.indexManager !== null) {
+      return;
+    }
+    const pluginRoot = normalizePath(
+      this.manifest.dir
+      ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`
+    );
+    const store = new PersistentIndexStore(
+      this.app.vault.adapter,
+      normalizePath(`${pluginRoot}/index`),
+      () => createEmptyIndexManifest(
+        this.manifest.version,
+        hashText(this.app.vault.getName())
+      )
+    );
+    const manager = new PersistentIndexManager(
+      this.app,
+      store,
+      this.manifest.version,
+      hashText(this.app.vault.getName()),
+      () => this.settings
+    );
+    this.indexManager = manager;
+    this.bindIndexViews();
+
+    try {
+      await manager.open();
+      if (this.lifecycle.signal.aborted) {
+        return;
+      }
+      this.registerPersistentIndexEvents(manager);
+      await manager.reconcile();
+    } catch {
+      new Notice("Semantic Links could not open the local semantic index. Lexical suggestions remain available.");
+    }
   }
 
   private registerLexicalIndexEvents(lexicalIndex: LexicalVaultIndex): void {
@@ -158,6 +290,59 @@ export default class SemanticLinksPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {
       lexicalIndex.scheduleRefresh(file);
     }));
+  }
+
+  private registerPersistentIndexEvents(manager: PersistentIndexManager): void {
+    if (this.persistentEventsRegistered) {
+      return;
+    }
+    this.persistentEventsRegistered = true;
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (isMarkdownFile(file)) {
+        manager.scheduleRefresh(file);
+      }
+    }));
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (isMarkdownFile(file)) {
+        manager.scheduleRefresh(file);
+      }
+    }));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      manager.scheduleRemove(file.path);
+    }));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      manager.scheduleRemove(oldPath);
+      if (isMarkdownFile(file)) {
+        manager.scheduleRefresh(file);
+      }
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      manager.scheduleRefresh(file);
+    }));
+  }
+
+  private async openIndexStatus(): Promise<void> {
+    let leaf: WorkspaceLeaf | null = this.app.workspace.getLeavesOfType(INDEX_STATUS_VIEW_TYPE)[0] ?? null;
+    if (leaf === null) {
+      leaf = this.app.workspace.getRightLeaf(false);
+      if (leaf === null) {
+        new Notice("Obsidian could not open the Semantic Links index view.");
+        return;
+      }
+      await leaf.setViewState({
+        type: INDEX_STATUS_VIEW_TYPE,
+        active: true
+      });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+  }
+
+  private bindIndexViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(INDEX_STATUS_VIEW_TYPE)) {
+      if (leaf.view instanceof IndexStatusView) {
+        leaf.view.bindManager();
+      }
+    }
   }
 
   private handleContextChanged(

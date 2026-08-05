@@ -29,12 +29,14 @@ declare module "@semantic-links/transformers" {
     useWasmCache: boolean;
     cacheKey: string;
     logLevel: number;
+    fetch: typeof globalThis.fetch;
     backends: {
       onnx: {
         wasm?: {
           proxy?: boolean;
           simd?: boolean;
           numThreads?: number;
+          wasmPaths?: string | { mjs: string; wasm: string };
         };
       };
     };
@@ -53,4 +55,12 @@ declare module "@semantic-links/transformers" {
       progress_callback?: (event: ProgressEvent) => void;
     }
   ): Promise<FeatureExtractionPipeline>;
+}
+
+declare module "@semantic-links/runtime-integrity" {
+  export const ORT_VERSION: string;
+  export const ORT_ASSETS: Readonly<Record<string, Readonly<{
+    sha256: string;
+    size: number;
+  }>>>;
 }

@@ -2,8 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 
 const production = process.argv[2] === "production";
 const executable = process.platform === "win32" ? "npx.cmd" : "npx";
-const nodeExecutable = process.execPath;
-const prepared = spawnSync(nodeExecutable, ["scripts/prepare-transformers-runtime.mjs"], {
+const prepared = spawnSync(process.execPath, ["scripts/prepare-transformers-runtime.mjs"], {
   stdio: "inherit"
 });
 if (prepared.status !== 0) {
@@ -12,7 +11,7 @@ if (prepared.status !== 0) {
   const args = [
     "--yes",
     "esbuild@0.25.5",
-    "src/main.ts",
+    "src/model-main.ts",
     "--bundle",
     "--platform=node",
     "--target=es2018",

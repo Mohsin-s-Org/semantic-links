@@ -113,7 +113,12 @@ export class LexicalVaultIndex {
     if (this.disposed || signature === this.scopeSignature) {
       return;
     }
+
     this.scopeSignature = signature;
+    this.generation += 1;
+    this.readyState = false;
+    this.clearRefreshTimers();
+    this.index.clear();
     this.scheduleRebuild(delayMs);
   }
 

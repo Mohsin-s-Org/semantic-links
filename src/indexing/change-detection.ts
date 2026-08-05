@@ -13,3 +13,14 @@ export function canReuseDocument(
 ): existing is IndexedDocument {
   return existing?.contentHash === contentHash;
 }
+
+export function findRemovedChunkIds(
+  existing: IndexedDocument | undefined,
+  nextChunkIds: readonly string[]
+): string[] {
+  if (existing === undefined) {
+    return [];
+  }
+  const retained = new Set(nextChunkIds);
+  return existing.chunkIds.filter((id) => !retained.has(id));
+}

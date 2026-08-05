@@ -15,6 +15,10 @@ test("chunks by headings while excluding protected Markdown", () => {
     "TABLE secret FROM #private",
     "```",
     "",
+    "<div class=\"private-widget\">",
+    "hidden HTML block content",
+    "</div>",
+    "",
     "## Evaporation",
     "Liquid water becomes vapour when energy increases. `privateCode()` and [[Existing link]] are not passage text.",
     "",
@@ -36,6 +40,7 @@ test("chunks by headings while excluding protected Markdown", () => {
   assert.match(indexed, /passage: Hydrology/u);
   assert.equal(indexed.includes("hidden metadata"), false);
   assert.equal(indexed.includes("TABLE secret"), false);
+  assert.equal(indexed.includes("hidden HTML"), false);
   assert.equal(indexed.includes("privateCode"), false);
   assert.equal(indexed.includes("Existing link"), false);
   assert.equal(indexed.includes("hidden = equation"), false);

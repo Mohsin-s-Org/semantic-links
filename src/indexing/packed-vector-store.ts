@@ -68,8 +68,14 @@ export class PackedVectorStore implements Iterable<[string, Float32Array]> {
 
     let row = this.rowsById.get(id);
     if (row === undefined) {
-      row = this.takeFreeRow() ?? this.rowsById.size + this.freeRows.length;
-      this.ensureCapacity(row + 1);
+      row = this.takeFreeRow();
+      if (row === undefined) {
+        this.ensureCapacity(this.capacity + 1);
+        row = this.takeFreeRow();
+      }
+      if (row === undefined) {
+        throw new Error("Packed vector storage could not allocate a row.");
+      }
       this.rowsById.set(id, row);
       this.rowIds[row] = id;
     }

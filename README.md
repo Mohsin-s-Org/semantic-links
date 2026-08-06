@@ -1,57 +1,23 @@
 # Semantic Links for Obsidian
 
-A privacy-first Obsidian plugin that suggests meaningful internal links while you write. Links are inserted only after explicit confirmation.
+Semantic Links is a privacy-first desktop Obsidian plugin that suggests conceptually relevant internal links while you write. It never inserts a link without explicit confirmation.
 
-Phase 3 adds a crash-safe persistent passage and vector index while preserving the fully local Phase 2 lexical suggestion engine.
+## Capabilities
 
-## Current capabilities
+- Local lexical matching across titles, aliases, headings, tags and note text
+- Optional verified `multilingual-e5-small` q8 model with explicit download consent
+- English, Arabic and mixed-language semantic retrieval
+- Focused query context using the note title, active selection or sentence, and bounded neighbours
+- Structural Markdown passage chunking with source ranges and heading breadcrumbs
+- Incremental persistent indexing with crash-safe journalling and checksummed generations
+- Canonical packed float32 vector storage and incremental search-worker updates
+- Length-bucketed, idle-aware background embedding with live-query priority
+- Optional local WASM thread tuning with automatic fallback
+- Opt-in local performance diagnostics and a repository-safe relevance evaluation suite
+- Atomic, revalidated wikilink insertion in one undoable CodeMirror transaction
+- Searchable Obsidian 1.13 settings, index status, rebuild and deletion controls
 
-- In-memory lexical indexing of frontmatter titles, aliases, headings, tags and cleaned note text
-- Unicode-aware exact, prefix, token and fuzzy matching, including Arabic normalization
-- Paragraph- and sentence-aware context extraction from the active word or selected phrase
-- Cursor-anchored suggestions with click or keyboard confirmation
-- Structural Markdown chunking by headings, paragraphs and sentence boundaries
-- Source offsets, line numbers, heading breadcrumbs, previews and lexical terms for every passage
-- Persistent manifests, document records, chunk records and row-major `Float32Array` vector files
-- Dirty-generation journaling with `.next` validation and `.previous` recovery
-- Incremental create, modify, rename, delete and metadata-cache updates
-- Mtime and content-hash reuse so unchanged notes are not reprocessed or re-embedded
-- Exclusions for folders, files, tags, frontmatter properties and protected Markdown
-- Index status view plus rebuild and delete commands
-- Revalidated wikilink insertion in one undoable CodeMirror transaction
-
-The embedding layer is batch-oriented and accepts a verified local `EmbeddingClient`. Phase 3 does not create fake semantic vectors or silently download a model. Lexical suggestions and persistent passage preparation work without a model; the consent-based Transformers.js/ONNX runtime remains a separate feasibility and delivery step.
-
-## Example
-
-Typing in this sentence:
-
-```markdown
-Plants lose water through their leaves during transpiration.
-```
-
-can suggest `Plant transpiration`. Explicitly accepting it produces one undoable edit:
-
-```markdown
-Plants lose [[Plant transpiration|water]] through their leaves during transpiration.
-```
-
-The plugin never inserts a link automatically.
-
-## Local index
-
-The persistent index is stored below the installed plugin directory, not in `data.json`:
-
-```text
-index/
-├─ manifest.json
-├─ documents.json
-├─ chunks.json
-├─ vectors.f32
-└─ journal.json
-```
-
-Generated index files remain local, are ignored by source control and are never included in GitHub releases. Use **Semantic Links: Show index status** to inspect progress, rebuild the index or delete the local copy without changing any note.
+Vault content, filenames, tags, links, passages, embeddings and index records remain on the device. Lexical suggestions remain available when the model is absent, disabled or unavailable.
 
 ## Development
 
@@ -63,11 +29,33 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
-npm run verify:reproducible-build
 npm run ci
 ```
 
-`main.js`, `dist/` and generated indexes must not be committed.
+`npm run ci` performs one strict typecheck, linting, all tests, a production bundle, reproducibility verification, repository and version checks, exact release staging, and a clean-vault smoke test.
+
+For informational exact-search measurements:
+
+```bash
+npm run benchmark:semantic
+```
+
+Generated `main.js`, `dist/`, model/runtime caches and local indexes must not be committed.
+
+## Local data
+
+Settings use Obsidian's `data.json`. The semantic index is stored separately below the plugin directory:
+
+```text
+index/
+├─ manifest.json
+├─ documents.json
+├─ chunks.json
+├─ vectors.f32
+└─ journal.json
+```
+
+The model and required runtime assets download only after explicit consent. Downloads are pinned, allowlisted and integrity-verified.
 
 ## Release assets
 
@@ -79,25 +67,24 @@ manifest.json
 styles.css
 ```
 
-No ZIP, model, WASM, checksum, index or documentation assets are attached. Release tags exactly match the manifest version without a `v` prefix. Every workflow action is pinned to an immutable commit, and each release asset receives a separate GitHub provenance attestation.
+No model, WASM, index, archive, checksum or documentation asset is attached. Release tags exactly match `manifest.json` without a `v` prefix, and every release asset receives a separate provenance attestation.
 
-## Planning documents
+## Project documents
 
 - [Master plan](semantic-links-master-plan.md)
 - [Master plan addendum](docs/master-plan-addendum.md)
 - [Obsidian implementation guardrails](docs/obsidian-implementation-guardrails.md)
-- [Phase 1 foundation checklist](docs/phase-1-foundation-checklist.md)
-- [Phase 2 lexical checklist](docs/phase-2-lexical-checklist.md)
-- [Phase 3 persistent index checklist](docs/phase-3-persistent-index-checklist.md)
+- [Phase 3 checklist](docs/phase-3-persistent-index-checklist.md)
+- [Semantic efficiency benchmarking](docs/semantic-efficiency-benchmarking.md)
 - [Community Plugins release checklist](docs/community-plugin-release-checklist.md)
 - [GitHub Actions usage policy](GITHUB_ACTIONS_POLICY.md)
 
-The addendum and guardrails are authoritative where they conflict with older implementation details in the original master plan.
-
-## Privacy
-
-Vault content, filenames, links, tags, passages, embeddings and index records remain on the device. The plugin sends no vault data to a hosted API. Future model or runtime downloads require explicit consent, pinned revisions, integrity checks and recoverable failure handling.
+The addendum and Obsidian guardrails are authoritative where older planning details conflict.
 
 ## Status
 
-Phase 3 persistent indexing is implemented. A manual Obsidian desktop walkthrough remains required before release. The next engineering step is the local model/runtime feasibility spike, followed by Phase 4 hybrid semantic retrieval and explanations.
+The consolidated implementation covers Phase 3, the verified local semantic runtime, Stage A measurement infrastructure, Stage B quality-neutral efficiency work, and the focused-query portion of Stage C through issue #18.
+
+Tokenizer-aware budgets, evaluated rank fusion and scale-gated Stage D experiments remain tracked in issues #19–#25. They are intentionally not presented as complete without their required benchmark and relevance evidence.
+
+Before release, run the documented live Obsidian desktop walkthrough and attach representative local performance and relevance reports to the tracking issues.

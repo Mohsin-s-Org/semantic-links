@@ -130,11 +130,14 @@ export class AdaptiveEmbeddingBatchController {
       "indexing.background_slice_duration_ms",
       outcome.durationMs
     );
-    if (
-      isConstrained(context, this.policy, this.lastActivityAt)
-      || outcome.durationMs > this.policy.sliceBudgetMs
-    ) {
+    if (isConstrained(context, this.policy, this.lastActivityAt)) {
+      this.returnToMinimum();
+      semanticDiagnostics.increment("indexing.background_batch_constrained");
+      return;
+    }
+    if (outcome.durationMs > this.policy.sliceBudgetMs) {
       this.reduceAfterSlowSlice(outcome.requestedSize);
+      this.setLearnedLimit(this.currentSizeValue);
       semanticDiagnostics.increment("indexing.background_batch_reduced");
       return;
     }
@@ -164,6 +167,7 @@ export class AdaptiveEmbeddingBatchController {
 
   recordFailure(): void {
     this.returnToMinimum();
+    this.setLearnedLimit(this.policy.minimumSize);
     semanticDiagnostics.increment("indexing.background_batch_failure_reset");
   }
 

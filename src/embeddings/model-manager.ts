@@ -1,3 +1,4 @@
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import { LocalEmbeddingClient, type ModelProgressListener } from "./local-embedding-client.ts";
 import { LOCAL_MODEL_CACHE_KEY } from "./model-config.ts";
 
@@ -48,15 +49,23 @@ export class LocalModelManager {
   async embedQuery(text: string, signal: AbortSignal): Promise<Float32Array | null> {
     const client = this.clientValue;
     if (client === null) {
+      semanticDiagnostics.increment("query.unavailable_count");
       return null;
     }
     const cached = this.queryCache.get(text);
     if (cached !== undefined) {
+      semanticDiagnostics.increment("query.cache_hit");
       this.queryCache.delete(text);
       this.queryCache.set(text, cached);
-      return new Float32Array(cached);
+      this.updateCacheGauges();
+      return semanticDiagnostics.measureSync("query.cache_copy_ms", () => {
+        return new Float32Array(cached);
+      });
     }
-    const vector = await client.embedQuery(text, signal);
+    semanticDiagnostics.increment("query.cache_miss");
+    const vector = await semanticDiagnostics.measure("query.embed_total_ms", () => {
+      return client.embedQuery(text, signal);
+    });
     this.queryCache.set(text, vector);
     while (this.queryCache.size > 48) {
       const oldest = this.queryCache.keys().next().value;
@@ -64,8 +73,12 @@ export class LocalModelManager {
         break;
       }
       this.queryCache.delete(oldest);
+      semanticDiagnostics.increment("query.cache_eviction");
     }
-    return new Float32Array(vector);
+    this.updateCacheGauges();
+    return semanticDiagnostics.measureSync("query.cache_copy_ms", () => {
+      return new Float32Array(vector);
+    });
   }
 
   cancelLoading(): void {
@@ -73,6 +86,7 @@ export class LocalModelManager {
       return;
     }
     this.loadingController.abort();
+    semanticDiagnostics.increment("model.load_cancelled");
     if (this.statusValue.state === "loading") {
       this.update({
         state: this.clientValue === null ? "not-installed" : "ready",
@@ -87,6 +101,8 @@ export class LocalModelManager {
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
+    this.updateCacheGauges();
+    semanticDiagnostics.captureMemory("unload");
     this.update({
       state: "disabled",
       message: "The local semantic model is installed but unloaded.",
@@ -99,7 +115,8 @@ export class LocalModelManager {
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
-    await deleteModelCache();
+    this.updateCacheGauges();
+    await semanticDiagnostics.measure("model.cache_delete_ms", deleteModelCache);
     this.update({
       state: "not-installed",
       message: "The local semantic model was removed.",
@@ -112,14 +129,17 @@ export class LocalModelManager {
     this.clientValue?.dispose();
     this.clientValue = null;
     this.queryCache.clear();
+    this.updateCacheGauges();
     this.listeners.clear();
   }
 
   private load(allowDownload: boolean): Promise<LocalEmbeddingClient> {
     if (this.clientValue !== null) {
+      semanticDiagnostics.increment("model.load_reused");
       return Promise.resolve(this.clientValue);
     }
     if (this.loading !== null) {
+      semanticDiagnostics.increment("model.load_deduplicated");
       return this.loading;
     }
     const controller = new AbortController();
@@ -157,9 +177,11 @@ export class LocalModelManager {
         throw abortError(signal);
       }
       this.clientValue = client;
+      semanticDiagnostics.captureMemory("reload");
       this.update({ state: "ready", message: "Local semantic matching is ready.", percent: 100 });
       return client;
     } catch (error) {
+      semanticDiagnostics.increment("model.load_error");
       if (allowDownload) {
         await deleteModelCache();
       }
@@ -172,6 +194,15 @@ export class LocalModelManager {
       }
       throw error;
     }
+  }
+
+  private updateCacheGauges(): void {
+    let bytes = 0;
+    for (const vector of this.queryCache.values()) {
+      bytes += vector.byteLength;
+    }
+    semanticDiagnostics.setGauge("query.cache_entries", this.queryCache.size);
+    semanticDiagnostics.setGauge("query.cache_bytes", bytes);
   }
 
   private update(status: ModelStatus): void {

@@ -106,8 +106,13 @@ export interface EmbeddingOutput {
   vector: Float32Array;
 }
 
+export interface InferenceQueueState {
+  queryPending: boolean;
+}
+
 export interface EmbeddingClient {
   readonly descriptor: ModelDescriptor;
   embed(inputs: readonly EmbeddingInput[], signal: AbortSignal): Promise<EmbeddingOutput[]>;
+  getInferenceQueueState?(): InferenceQueueState;
   dispose(): void;
 }

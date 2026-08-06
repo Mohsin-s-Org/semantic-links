@@ -74,10 +74,16 @@ test("validates the repeated sample count", async () => {
 });
 
 class FakeClient implements ThreadBenchmarkClient {
+  private readonly onDispose: () => void;
+  private readonly onQuery: () => void;
+
   constructor(
-    private readonly onDispose: () => void = () => undefined,
-    private readonly onQuery: () => void = () => undefined
-  ) {}
+    onDispose: () => void = () => undefined,
+    onQuery: () => void = () => undefined
+  ) {
+    this.onDispose = onDispose;
+    this.onQuery = onQuery;
+  }
 
   embedQuery(): Promise<Float32Array> {
     this.onQuery();

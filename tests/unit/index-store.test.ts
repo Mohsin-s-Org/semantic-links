@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { IndexSnapshot } from "../../src/indexing/types.ts";
+import type { IndexManifest, IndexSnapshot } from "../../src/indexing/types.ts";
+import { prepareGenerationFiles } from "../../src/storage/index-integrity.ts";
 import {
   createEmptyIndexManifest,
   PersistentIndexStore,
@@ -91,19 +92,28 @@ class MemoryAdapter implements IndexStorageAdapter {
   }
 }
 
-test("round-trips validated documents, chunks and row-major vectors", async () => {
+const ROOT = "plugin/index";
+
+test("round-trips checksummed files without cloning the final vector matrix", async () => {
   const adapter = new MemoryAdapter();
   const store = createStore(adapter);
-  const written = await store.write(createSnapshot(1, "first"));
+  const snapshot = createSnapshot(1, "first");
+  const originalBuffer = snapshot.vectors.buffer;
+  const written = await store.write(snapshot);
   const opened = await store.open();
 
   assert.equal(written.manifest.dirty, false);
+  assert.equal(written.vectors.buffer, originalBuffer);
+  assert.match(written.manifest.files?.documents.sha256 ?? "", /^[a-f0-9]{64}$/u);
+  assert.match(written.manifest.files?.chunks.sha256 ?? "", /^[a-f0-9]{64}$/u);
+  assert.match(written.manifest.files?.vectors.sha256 ?? "", /^[a-f0-9]{64}$/u);
+  assert.equal(written.manifest.files?.vectors.bytes, snapshot.vectors.byteLength);
   assert.equal(opened.manifest.generation, 1);
   assert.equal(opened.manifest.scopeFingerprint, "scope");
   assert.equal(opened.documents[0]?.path, "Notes/first.md");
   assert.equal(opened.chunks[0]?.vectorRow, 0);
   assert.deepEqual([...opened.vectors], [0.25, 0.75]);
-  assert.equal(await adapter.exists("plugin/index/journal.ndjson"), false);
+  assert.equal(await adapter.exists(`${ROOT}/journal.ndjson`), false);
 });
 
 test("restores the last validated generation after an interrupted write", async () => {
@@ -117,22 +127,82 @@ test("restores the last validated generation after an interrupted write", async 
     "chunks.json",
     "vectors.f32"
   ]) {
-    await adapter.copy(`plugin/index/${name}`, `plugin/index/${name}.previous`);
+    await adapter.copy(`${ROOT}/${name}`, `${ROOT}/${name}.previous`);
   }
   const dirty = {
     ...createSnapshot(2, "interrupted").manifest,
     dirty: true
   };
-  await adapter.write("plugin/index/manifest.json", `${JSON.stringify(dirty)}\n`);
-  await adapter.write("plugin/index/documents.json.next", "[]\n");
+  await adapter.write(`${ROOT}/manifest.json`, `${JSON.stringify(dirty)}\n`);
+  await adapter.write(`${ROOT}/documents.json.next`, "[]\n");
 
   const recovered = await createStore(adapter).open();
 
   assert.equal(recovered.manifest.generation, 1);
   assert.equal(recovered.manifest.dirty, false);
   assert.equal(recovered.documents[0]?.path, "Notes/stable.md");
-  assert.equal(await adapter.exists("plugin/index/documents.json.next"), false);
-  assert.equal(await adapter.exists("plugin/index/manifest.json.previous"), false);
+  assert.equal(await adapter.exists(`${ROOT}/documents.json.next`), false);
+  assert.equal(await adapter.exists(`${ROOT}/manifest.json.previous`), false);
+});
+
+test("restores the previous checksum-verified generation after corruption", async () => {
+  const adapter = new MemoryAdapter();
+  const store = createStore(adapter);
+  await store.write(createSnapshot(1, "stable"));
+  await store.write(createSnapshot(2, "current"));
+  const current = await adapter.readBinary(`${ROOT}/vectors.f32`);
+  new Uint8Array(current)[0] ^= 0xff;
+  await adapter.writeBinary(`${ROOT}/vectors.f32`, current);
+
+  const recovered = await createStore(adapter).open();
+
+  assert.equal(recovered.manifest.generation, 1);
+  assert.equal(recovered.documents[0]?.path, "Notes/stable.md");
+});
+
+test("rejects same-size checksum corruption without a prior generation", async () => {
+  const adapter = new MemoryAdapter();
+  await createStore(adapter).write(createSnapshot(1, "first"));
+  const documents = await adapter.read(`${ROOT}/documents.json`);
+  await adapter.write(`${ROOT}/documents.json`, documents.replace("first", "fIrst"));
+
+  await assert.rejects(
+    createStore(adapter).open(),
+    /documents checksum mismatch/u
+  );
+});
+
+test("rejects truncated generation files by recorded byte size", async () => {
+  const adapter = new MemoryAdapter();
+  await createStore(adapter).write(createSnapshot(1, "first"));
+  const vectors = await adapter.readBinary(`${ROOT}/vectors.f32`);
+  await adapter.writeBinary(`${ROOT}/vectors.f32`, vectors.slice(0, 4));
+
+  await assert.rejects(
+    createStore(adapter).open(),
+    /vectors size mismatch/u
+  );
+});
+
+test("fully scans untrusted vectors after checksum verification", async () => {
+  const adapter = new MemoryAdapter();
+  const written = await createStore(adapter).write(createSnapshot(1, "first"));
+  const corrupted = new Float32Array(written.vectors);
+  corrupted[1] = Number.NaN;
+  const files = await prepareGenerationFiles(
+    written.documents,
+    written.chunks,
+    corrupted
+  );
+  const manifest = parseManifest(await adapter.read(`${ROOT}/manifest.json`));
+  manifest.files = files.integrity;
+  await adapter.writeBinary(`${ROOT}/vectors.f32`, files.vectorBuffer);
+  await adapter.write(`${ROOT}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  await assert.rejects(
+    createStore(adapter).open(),
+    /non-finite value/u
+  );
 });
 
 test("rejects duplicate vector rows before writing", async () => {
@@ -156,7 +226,7 @@ test("rejects duplicate vector rows before writing", async () => {
 function createStore(adapter: MemoryAdapter): PersistentIndexStore {
   return new PersistentIndexStore(
     adapter,
-    "plugin/index",
+    ROOT,
     () => createEmptyIndexManifest("0.1.0", "vault", "scope")
   );
 }
@@ -207,6 +277,10 @@ function createSnapshot(generation: number, name: string): IndexSnapshot {
     }],
     vectors: new Float32Array([0.25, 0.75])
   };
+}
+
+function parseManifest(value: string): IndexManifest {
+  return JSON.parse(value) as IndexManifest;
 }
 
 function cloneValue(value: string | ArrayBuffer): string | ArrayBuffer {

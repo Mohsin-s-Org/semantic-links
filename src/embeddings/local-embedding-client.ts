@@ -5,6 +5,7 @@ import {
   type FeatureExtractionPipeline,
   type ProgressEvent
 } from "@semantic-links/transformers";
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import type {
   EmbeddingClient,
   EmbeddingInput,
@@ -44,18 +45,24 @@ export class LocalEmbeddingClient implements EmbeddingClient {
       allowDownload ? "Preparing the verified local semantic model." : "Loading the cached semantic model.",
       null
     );
-    const extractor = await pipeline("feature-extraction", LOCAL_MODEL_ID, {
-      revision: LOCAL_MODEL_REVISION,
-      dtype: "q8",
-      local_files_only: !allowDownload,
-      progress_callback: (event) => reportProgress(event, onProgress)
+    semanticDiagnostics.increment(allowDownload ? "model.download_load_count" : "model.cache_load_count");
+    const extractor = await semanticDiagnostics.measure("model.load_ms", () => {
+      return pipeline("feature-extraction", LOCAL_MODEL_ID, {
+        revision: LOCAL_MODEL_REVISION,
+        dtype: "q8",
+        local_files_only: !allowDownload,
+        progress_callback: (event) => reportProgress(event, onProgress)
+      });
     });
     if (signal.aborted) {
       await Promise.resolve(extractor.dispose()).catch(() => undefined);
       throwIfUnavailable(false, signal);
     }
     const client = new LocalEmbeddingClient(extractor);
-    await client.embedQuery("warm up local semantic matching", signal);
+    await semanticDiagnostics.measure("model.warmup_ms", () => {
+      return client.embedQuery("warm up local semantic matching", signal);
+    });
+    semanticDiagnostics.captureMemory("warm");
     onProgress?.("The local semantic model is ready.", 100);
     return client;
   }
@@ -64,9 +71,11 @@ export class LocalEmbeddingClient implements EmbeddingClient {
     inputs: readonly EmbeddingInput[],
     signal: AbortSignal
   ): Promise<EmbeddingOutput[]> {
+    semanticDiagnostics.setGauge("inference.background_batch_size", inputs.length);
+    semanticDiagnostics.increment("inference.background_input_count", inputs.length);
     return this.scheduler.run(INDEX_PRIORITY, async () => {
       throwIfUnavailable(this.disposed, signal);
-      const vectors = await this.run(inputs.map((input) => input.text), signal);
+      const vectors = await this.run(inputs.map((input) => input.text), signal, "background");
       return inputs.map((input, index) => ({
         id: input.id,
         vector: vectors[index] ?? missingVector(input.id)
@@ -75,9 +84,11 @@ export class LocalEmbeddingClient implements EmbeddingClient {
   }
 
   embedQuery(text: string, signal: AbortSignal): Promise<Float32Array> {
+    semanticDiagnostics.increment("inference.query_input_count");
+    semanticDiagnostics.setGauge("inference.query_characters", text.length);
     return this.scheduler.run(QUERY_PRIORITY, async () => {
       throwIfUnavailable(this.disposed, signal);
-      const [vector] = await this.run([`query: ${text}`], signal);
+      const [vector] = await this.run([`query: ${text}`], signal, "query");
       if (vector === undefined) {
         throw new Error("The local model did not return a query vector.");
       }
@@ -90,17 +101,28 @@ export class LocalEmbeddingClient implements EmbeddingClient {
       return;
     }
     this.disposed = true;
+    semanticDiagnostics.captureMemory("unload");
     void Promise.resolve(this.extractor.dispose()).catch(() => undefined);
   }
 
-  private async run(texts: string[], signal: AbortSignal): Promise<Float32Array[]> {
+  private async run(
+    texts: string[],
+    signal: AbortSignal,
+    lane: "query" | "background"
+  ): Promise<Float32Array[]> {
     throwIfUnavailable(this.disposed, signal);
-    const output = await this.extractor(texts, {
-      pooling: "mean",
-      normalize: true
+    const characterCount = texts.reduce((total, text) => total + text.length, 0);
+    semanticDiagnostics.setGauge(`inference.${lane}_characters`, characterCount);
+    const output = await semanticDiagnostics.measure(`model.${lane}_inference_ms`, () => {
+      return this.extractor(texts, {
+        pooling: "mean",
+        normalize: true
+      });
     });
     throwIfUnavailable(this.disposed, signal);
-    return splitOutput(output.data, output.dims, texts.length);
+    return semanticDiagnostics.measureSync("model.output_split_ms", () => {
+      return splitOutput(output.data, output.dims, texts.length);
+    });
   }
 }
 

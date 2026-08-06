@@ -14,11 +14,13 @@ test("runs a live query before queued background work", async () => {
     order.push("first-background");
     await gate;
   });
-  const second = scheduler.run(1, async () => {
+  const second = scheduler.run(1, () => {
     order.push("second-background");
+    return Promise.resolve();
   });
-  const query = scheduler.run(0, async () => {
+  const query = scheduler.run(0, () => {
     order.push("query");
+    return Promise.resolve();
   });
 
   release();

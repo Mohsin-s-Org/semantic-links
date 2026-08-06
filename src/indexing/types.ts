@@ -7,6 +7,17 @@ export interface ModelDescriptor {
   runtimeVersion: string;
 }
 
+export interface IndexFileIntegrity {
+  bytes: number;
+  sha256: string;
+}
+
+export interface IndexGenerationIntegrity {
+  documents: IndexFileIntegrity;
+  chunks: IndexFileIntegrity;
+  vectors: IndexFileIntegrity;
+}
+
 export interface IndexManifest {
   schemaVersion: number;
   pluginVersion: string;
@@ -18,6 +29,7 @@ export interface IndexManifest {
   lastCompletedAt: number | null;
   dirty: boolean;
   generation: number;
+  files: IndexGenerationIntegrity | null;
 }
 
 export interface IndexedHeading {

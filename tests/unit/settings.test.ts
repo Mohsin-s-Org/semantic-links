@@ -7,13 +7,15 @@ import {
 } from "../../src/constants.ts";
 import { loadAndMigrateSettings } from "../../src/settings/schema.ts";
 
-test("missing settings load safe lexical-only defaults", () => {
+test("missing settings load safe lexical-only automatic-thread defaults", () => {
   const result = loadAndMigrateSettings(null);
 
   assert.equal(result.needsSave, false);
   assert.equal(result.settings.settingsVersion, SETTINGS_VERSION);
   assert.equal(result.settings.lexicalMatchingEnabled, true);
   assert.equal(result.settings.semanticIndexingEnabled, false);
+  assert.equal(result.settings.semanticThreadMode, "automatic");
+  assert.equal(result.settings.semanticThreadCount, 0);
   assert.equal(
     result.settings.backgroundEmbeddingBatchLimit,
     DEFAULT_BACKGROUND_BATCH_SIZE
@@ -33,6 +35,8 @@ test("malformed settings are discarded and replaced", () => {
 test("legacy settings migrate and invalid values are repaired", () => {
   const result = loadAndMigrateSettings({
     semanticMatchingEnabled: true,
+    semanticThreadMode: "tuned",
+    semanticThreadCount: 3,
     backgroundEmbeddingBatchLimit: 999,
     debounceMs: 50,
     maxSuggestions: 999,
@@ -45,6 +49,8 @@ test("legacy settings migrate and invalid values are repaired", () => {
 
   assert.equal(result.needsSave, true);
   assert.equal(result.settings.semanticIndexingEnabled, true);
+  assert.equal(result.settings.semanticThreadMode, "automatic");
+  assert.equal(result.settings.semanticThreadCount, 0);
   assert.equal(
     result.settings.backgroundEmbeddingBatchLimit,
     MAX_BACKGROUND_BATCH_SIZE
@@ -62,53 +68,41 @@ test("legacy settings migrate and invalid values are repaired", () => {
 });
 
 test("invalid values in the current schema are persisted after repair", () => {
-  const result = loadAndMigrateSettings({
-    settingsVersion: SETTINGS_VERSION,
-    automaticSuggestions: true,
-    lexicalMatchingEnabled: true,
-    semanticIndexingEnabled: false,
-    semanticModelEnabled: false,
-    semanticModelInstalled: false,
+  const result = loadAndMigrateSettings(currentSettings({
+    semanticThreadMode: "tuned",
+    semanticThreadCount: 2,
+    semanticThreadModelRevision: "",
+    semanticThreadRuntimeVersion: "runtime",
+    semanticThreadDeviceClass: "5-8",
     backgroundEmbeddingBatchLimit: 1,
-    debounceMs: "invalid",
-    maxSuggestions: 6,
-    minimumConfidence: 0.55,
-    excludedFolders: [],
-    excludedFiles: [],
-    excludedTags: [],
-    excludedProperties: [],
-    linkPathMode: "shortest"
-  });
+    debounceMs: "invalid"
+  }));
 
   assert.equal(result.needsSave, true);
   assert.equal(result.settings.debounceMs, 350);
+  assert.equal(result.settings.semanticThreadMode, "automatic");
+  assert.equal(result.settings.semanticThreadCount, 0);
   assert.equal(
     result.settings.backgroundEmbeddingBatchLimit,
     DEFAULT_BACKGROUND_BATCH_SIZE
   );
 });
 
-test("preserves valid learned batch tuning in the current schema", () => {
-  const result = loadAndMigrateSettings({
-    settingsVersion: SETTINGS_VERSION,
-    automaticSuggestions: true,
-    lexicalMatchingEnabled: true,
-    semanticIndexingEnabled: false,
-    semanticModelEnabled: false,
-    semanticModelInstalled: false,
-    backgroundEmbeddingBatchLimit: 10,
-    debounceMs: 350,
-    maxSuggestions: 6,
-    minimumConfidence: 0.55,
-    excludedFolders: [],
-    excludedFiles: [],
-    excludedTags: [],
-    excludedProperties: [],
-    linkPathMode: "shortest"
-  });
+test("preserves valid learned batch and thread tuning", () => {
+  const result = loadAndMigrateSettings(currentSettings({
+    semanticThreadMode: "tuned",
+    semanticThreadCount: 2,
+    semanticThreadModelRevision: "model-revision",
+    semanticThreadRuntimeVersion: "runtime-version",
+    semanticThreadDeviceClass: "5-8",
+    backgroundEmbeddingBatchLimit: 10
+  }));
 
   assert.equal(result.needsSave, false);
   assert.equal(result.settings.backgroundEmbeddingBatchLimit, 10);
+  assert.equal(result.settings.semanticThreadMode, "tuned");
+  assert.equal(result.settings.semanticThreadCount, 2);
+  assert.equal(result.settings.semanticThreadDeviceClass, "5-8");
 });
 
 test("future schemas are read defensively without overwriting them", () => {
@@ -124,3 +118,29 @@ test("future schemas are read defensively without overwriting them", () => {
   assert.equal(result.settings.automaticSuggestions, false);
   assert.equal(result.settings.linkPathMode, "full");
 });
+
+function currentSettings(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    settingsVersion: SETTINGS_VERSION,
+    automaticSuggestions: true,
+    lexicalMatchingEnabled: true,
+    semanticIndexingEnabled: false,
+    semanticModelEnabled: false,
+    semanticModelInstalled: false,
+    semanticThreadMode: "automatic",
+    semanticThreadCount: 0,
+    semanticThreadModelRevision: "",
+    semanticThreadRuntimeVersion: "",
+    semanticThreadDeviceClass: "unknown",
+    backgroundEmbeddingBatchLimit: DEFAULT_BACKGROUND_BATCH_SIZE,
+    debounceMs: 350,
+    maxSuggestions: 6,
+    minimumConfidence: 0.55,
+    excludedFolders: [],
+    excludedFiles: [],
+    excludedTags: [],
+    excludedProperties: [],
+    linkPathMode: "shortest",
+    ...overrides
+  };
+}

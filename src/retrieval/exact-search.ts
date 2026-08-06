@@ -1,3 +1,5 @@
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
+
 export interface VectorCandidate<T> {
   value: T;
   vector: Float32Array;
@@ -16,25 +18,36 @@ export function topDotProducts<T>(
   if (limit < 1) {
     return [];
   }
+  const finish = semanticDiagnostics.startSpan("search.exact_ms");
   const top: ScoredCandidate<T>[] = [];
-  for (const candidate of candidates) {
-    if (candidate.vector.length !== query.length) {
-      continue;
+  let candidateCount = 0;
+  try {
+    for (const candidate of candidates) {
+      candidateCount += 1;
+      if (candidate.vector.length !== query.length) {
+        semanticDiagnostics.increment("search.dimension_mismatch");
+        continue;
+      }
+      const scored = {
+        value: candidate.value,
+        score: dotProduct(query, candidate.vector)
+      };
+      if (top.length < limit) {
+        top.push(scored);
+        continue;
+      }
+      const lowest = lowestIndex(top);
+      if (scored.score > (top[lowest]?.score ?? Number.NEGATIVE_INFINITY)) {
+        top[lowest] = scored;
+      }
     }
-    const scored = {
-      value: candidate.value,
-      score: dotProduct(query, candidate.vector)
-    };
-    if (top.length < limit) {
-      top.push(scored);
-      continue;
-    }
-    const lowest = lowestIndex(top);
-    if (scored.score > (top[lowest]?.score ?? Number.NEGATIVE_INFINITY)) {
-      top[lowest] = scored;
-    }
+    return top.sort((left, right) => right.score - left.score);
+  } finally {
+    semanticDiagnostics.setGauge("search.candidate_count", candidateCount);
+    semanticDiagnostics.setGauge("search.query_dimensions", query.length);
+    semanticDiagnostics.setGauge("search.result_count", top.length);
+    finish();
   }
-  return top.sort((left, right) => right.score - left.score);
 }
 
 export function dotProduct(left: Float32Array, right: Float32Array): number {

@@ -206,18 +206,12 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         );
         setting.addButton((button) => {
           button.setButtonText("Tune").onClick(() => {
-            const tune = this.owner.tuneModelThreads;
-            if (tune !== undefined) {
-              void tune.call(this.owner).then(() => this.display());
-            }
+            this.runAndRefresh(this.owner.tuneModelThreads);
           });
         });
         setting.addButton((button) => {
           button.setButtonText("Use automatic").onClick(() => {
-            const useAutomatic = this.owner.useAutomaticModelThreads;
-            if (useAutomatic !== undefined) {
-              void useAutomatic.call(this.owner).then(() => this.display());
-            }
+            this.runAndRefresh(this.owner.useAutomaticModelThreads);
           });
         });
       }
@@ -235,14 +229,21 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         );
         setting.addButton((button) => {
           button.setButtonText("Reset").onClick(() => {
-            const reset = this.owner.resetBackgroundBatchTuning;
-            if (reset !== undefined) {
-              void reset.call(this.owner).then(() => this.display());
-            }
+            this.runAndRefresh(this.owner.resetBackgroundBatchTuning);
           });
         });
       }
     };
+  }
+
+  private runAndRefresh(action: (() => Promise<void>) | undefined): void {
+    if (action === undefined) {
+      return;
+    }
+    void action.call(this.owner).then(
+      () => this.display(),
+      () => this.display()
+    );
   }
 
   private heading(name: string): SettingDefinitionItem<SettingKey> {
@@ -272,7 +273,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
             .setPlaceholder(placeholder)
             .onChange((value) => {
               this.owner.settings[key] = transform(normalizeDelimitedList(value));
-              void this.owner.saveSettings();
+              void this.owner.saveSettings().catch(() => undefined);
             });
           text.inputEl.addClass("semantic-links-settings-list");
         });

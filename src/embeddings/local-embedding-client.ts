@@ -9,7 +9,8 @@ import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import type {
   EmbeddingClient,
   EmbeddingInput,
-  EmbeddingOutput
+  EmbeddingOutput,
+  InferenceQueueState
 } from "../indexing/types.ts";
 import { InferenceScheduler } from "./inference-scheduler.ts";
 import {
@@ -94,6 +95,12 @@ export class LocalEmbeddingClient implements EmbeddingClient {
       }
       return vector;
     });
+  }
+
+  getInferenceQueueState(): InferenceQueueState {
+    return {
+      queryPending: this.scheduler.hasPriority(QUERY_PRIORITY)
+    };
   }
 
   dispose(): void {

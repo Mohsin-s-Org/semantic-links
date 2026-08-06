@@ -75,10 +75,12 @@ export async function runThreadBenchmark(
     samples.push(candidate);
     let client: ThreadBenchmarkClient | null = null;
     try {
-      client = await createClient(threads, signal);
+      const activeClient = await createClient(threads, signal);
+      client = activeClient;
       throwIfAborted(signal);
-      await client.embedQuery(QUERY_TEXT, signal);
-      await client.embed(BATCH_INPUTS, signal);
+      await activeClient.embedQuery(QUERY_TEXT, signal);
+      throwIfAborted(signal);
+      await activeClient.embed(BATCH_INPUTS, signal);
       for (let sample = 0; sample < sampleCount; sample += 1) {
         throwIfAborted(signal);
         options.onProgress?.({
@@ -88,9 +90,9 @@ export async function runThreadBenchmark(
           sample: sample + 1,
           sampleCount
         });
-        const queryMs = await measure(() => client?.embedQuery(QUERY_TEXT, signal));
+        const queryMs = await measure(() => activeClient.embedQuery(QUERY_TEXT, signal));
         throwIfAborted(signal);
-        const batchMs = await measure(() => client?.embed(BATCH_INPUTS, signal));
+        const batchMs = await measure(() => activeClient.embed(BATCH_INPUTS, signal));
         candidate.queryMs.push(queryMs);
         candidate.batchMs.push(batchMs);
         semanticDiagnostics.record(`thread_tuning.query_${threads}_ms`, queryMs);
@@ -114,13 +116,9 @@ export async function runThreadBenchmark(
   };
 }
 
-async function measure(operation: () => Promise<unknown> | undefined): Promise<number> {
+async function measure(operation: () => Promise<unknown>): Promise<number> {
   const started = monotonicNow();
-  const result = operation();
-  if (result === undefined) {
-    throw new Error("Thread benchmark client became unavailable.");
-  }
-  await result;
+  await operation();
   return Math.max(Number.EPSILON, monotonicNow() - started);
 }
 

@@ -1,5 +1,6 @@
 import { Notice } from "obsidian";
 import {
+  BACKGROUND_BATCH_IDLE_MS,
   COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
   DEFAULT_BACKGROUND_BATCH_SIZE,
   DOWNLOAD_MODEL_COMMAND_ID,
@@ -7,11 +8,24 @@ import {
   RESET_BACKGROUND_TUNING_COMMAND_ID,
   RUN_RELEVANCE_EVALUATION_COMMAND_ID,
   START_DIAGNOSTICS_COMMAND_ID,
-  STOP_DIAGNOSTICS_COMMAND_ID
+  STOP_DIAGNOSTICS_COMMAND_ID,
+  TUNE_MODEL_THREADS_COMMAND_ID
 } from "./constants.ts";
 import { semanticDiagnostics } from "./diagnostics/performance.ts";
 import type { SuggestionContext } from "./editor/context.ts";
 import { LocalModelManager } from "./embeddings/model-manager.ts";
+import {
+  LOCAL_MODEL_DESCRIPTOR,
+  LOCAL_MODEL_REVISION
+} from "./embeddings/model-config.ts";
+import type { ThreadBenchmarkResult } from "./embeddings/thread-benchmark.ts";
+import {
+  approvedThreadCandidates,
+  classifyThreadDevice,
+  isThreadTuningCompatible,
+  type ThreadTuningIdentity,
+  type WasmThreadCount
+} from "./embeddings/thread-tuning.ts";
 import { runLocalRelevanceEvaluation } from "./evaluation/local-evaluation.ts";
 import {
   backgroundEmbeddingBatches
@@ -25,6 +39,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   private readonly semanticLifecycle = new AbortController();
   private readonly modelManager = new LocalModelManager();
   private evaluationController: AbortController | null = null;
+  private threadTuningController: AbortController | null = null;
 
   override async onload(): Promise<void> {
     await super.onload();
@@ -34,6 +49,8 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
         void this.persistBackgroundBatchLimit(limit).catch(() => undefined);
       }
     );
+    await this.configureStoredThreadProfile();
+
     const markActivity = (): void => backgroundEmbeddingBatches.markActivity();
     this.registerDomEvent(document, "keydown", markActivity, { capture: true });
     this.registerDomEvent(document, "input", markActivity, { capture: true });
@@ -49,6 +66,15 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       id: REMOVE_MODEL_COMMAND_ID,
       name: "Remove local semantic model and vectors",
       callback: () => this.requestModelRemoval()
+    });
+    this.addCommand({
+      id: TUNE_MODEL_THREADS_COMMAND_ID,
+      name: "Tune local model thread count",
+      callback: () => {
+        void this.tuneModelThreads().catch(() => {
+          new Notice("Local thread tuning could not complete. Automatic threads remain enabled.");
+        });
+      }
     });
     this.addCommand({
       id: RESET_BACKGROUND_TUNING_COMMAND_ID,
@@ -103,6 +129,8 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   override onunload(): void {
     this.evaluationController?.abort();
     this.evaluationController = null;
+    this.threadTuningController?.abort();
+    this.threadTuningController = null;
     if (semanticDiagnostics.enabled) {
       semanticDiagnostics.stop();
     }
@@ -205,6 +233,93 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     await this.saveSettings();
   }
 
+  async tuneModelThreads(): Promise<void> {
+    const running = this.threadTuningController;
+    if (running !== null) {
+      running.abort(new DOMException("Thread tuning was cancelled.", "AbortError"));
+      new Notice("Cancelling thread tuning and restoring automatic inference.");
+      return;
+    }
+    if (
+      !this.settings.semanticModelInstalled
+      || !this.settings.semanticModelEnabled
+      || this.modelManager.client === null
+    ) {
+      new Notice("Enable the installed local semantic model before tuning threads.");
+      return;
+    }
+
+    const controller = new AbortController();
+    this.threadTuningController = controller;
+    const startedDiagnostics = !semanticDiagnostics.enabled;
+    if (startedDiagnostics) {
+      semanticDiagnostics.start();
+    }
+    new Notice("Pause typing briefly while local thread settings are tested. Run the command again to cancel.");
+
+    try {
+      await waitForQuietEditor(controller.signal);
+      const manager = await this.waitForIndexManager();
+      await manager?.setEmbeddingClient(null);
+      const outcome = await this.modelManager.tuneThreads(controller.signal);
+      await manager?.setEmbeddingClient(outcome.client);
+      if (outcome.benchmark === null) {
+        await this.persistAutomaticThreadProfile();
+        new Notice("Thread tuning was cancelled. Automatic inference is restored.");
+        return;
+      }
+
+      await this.persistThreadDecision(outcome.benchmark);
+      const performance = startedDiagnostics
+        ? semanticDiagnostics.stop()
+        : semanticDiagnostics.report();
+      await copyJson({
+        schemaVersion: 1,
+        identity: currentThreadIdentity(),
+        threadTuning: outcome.benchmark,
+        performance
+      });
+      new Notice(formatThreadDecision(outcome.benchmark));
+    } catch (error) {
+      await this.persistAutomaticThreadProfile();
+      const fallback = this.modelManager.client;
+      if (fallback !== null) {
+        await this.indexManager?.setEmbeddingClient(fallback);
+      }
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error
+          ? error.message
+          : "Thread tuning failed.";
+        new Notice(`${message} Automatic inference is restored.`);
+      }
+    } finally {
+      if (startedDiagnostics && semanticDiagnostics.enabled) {
+        semanticDiagnostics.stop();
+      }
+      if (this.threadTuningController === controller) {
+        this.threadTuningController = null;
+      }
+    }
+  }
+
+  async useAutomaticModelThreads(): Promise<void> {
+    this.threadTuningController?.abort(
+      new DOMException("Automatic thread mode was selected.", "AbortError")
+    );
+    await this.persistAutomaticThreadProfile();
+    this.modelManager.configureThreads(0);
+    if (
+      this.settings.semanticModelInstalled
+      && this.settings.semanticModelEnabled
+    ) {
+      await this.indexManager?.setEmbeddingClient(null);
+      this.modelManager.unload();
+      const client = await this.modelManager.loadCached();
+      await this.indexManager?.setEmbeddingClient(client);
+    }
+    new Notice("Automatic local inference threads are enabled.");
+  }
+
   async resetBackgroundBatchTuning(): Promise<void> {
     backgroundEmbeddingBatches.resetTuning();
     this.settings.backgroundEmbeddingBatchLimit = DEFAULT_BACKGROUND_BATCH_SIZE;
@@ -269,6 +384,7 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     await this.modelManager.remove();
     this.settings.semanticModelEnabled = false;
     this.settings.semanticModelInstalled = false;
+    await this.persistAutomaticThreadProfile();
     await this.saveSettings();
     new Notice("The local semantic model and vectors were removed.");
   }
@@ -285,6 +401,55 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     await (await this.waitForIndexManager())?.setEmbeddingClient(client);
   }
 
+  private async configureStoredThreadProfile(): Promise<void> {
+    const identity = currentThreadIdentity();
+    const compatible = this.settings.semanticThreadMode === "tuned"
+      && isThreadTuningCompatible({
+        modelRevision: this.settings.semanticThreadModelRevision,
+        runtimeVersion: this.settings.semanticThreadRuntimeVersion,
+        deviceClass: this.settings.semanticThreadDeviceClass
+      }, identity)
+      && approvedThreadCandidates(globalThis.navigator?.hardwareConcurrency)
+        .includes(this.settings.semanticThreadCount)
+      && this.settings.semanticThreadCount !== 0;
+    if (compatible) {
+      this.modelManager.configureThreads(this.settings.semanticThreadCount);
+      return;
+    }
+    this.modelManager.configureThreads(0);
+    if (this.settings.semanticThreadMode !== "automatic") {
+      await this.persistAutomaticThreadProfile();
+    }
+  }
+
+  private async persistThreadDecision(
+    benchmark: ThreadBenchmarkResult
+  ): Promise<void> {
+    const threads = benchmark.decision.threads;
+    if (threads === 0) {
+      await this.persistAutomaticThreadProfile();
+      return;
+    }
+    const identity = currentThreadIdentity();
+    this.settings.semanticThreadMode = "tuned";
+    this.settings.semanticThreadCount = threads;
+    this.settings.semanticThreadModelRevision = identity.modelRevision;
+    this.settings.semanticThreadRuntimeVersion = identity.runtimeVersion;
+    this.settings.semanticThreadDeviceClass = identity.deviceClass;
+    this.modelManager.configureThreads(threads);
+    await this.saveData(this.settings);
+  }
+
+  private async persistAutomaticThreadProfile(): Promise<void> {
+    this.settings.semanticThreadMode = "automatic";
+    this.settings.semanticThreadCount = 0;
+    this.settings.semanticThreadModelRevision = "";
+    this.settings.semanticThreadRuntimeVersion = "";
+    this.settings.semanticThreadDeviceClass = "unknown";
+    this.modelManager.configureThreads(0);
+    await this.saveData(this.settings);
+  }
+
   private async persistBackgroundBatchLimit(limit: number): Promise<void> {
     if (this.settings.backgroundEmbeddingBatchLimit === limit) {
       return;
@@ -298,10 +463,54 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       if (this.indexManager !== null) {
         return this.indexManager;
       }
-      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 50));
+      await delay(50, this.semanticLifecycle.signal);
     }
     return null;
   }
+}
+
+function currentThreadIdentity(): ThreadTuningIdentity {
+  return {
+    modelRevision: LOCAL_MODEL_REVISION,
+    runtimeVersion: LOCAL_MODEL_DESCRIPTOR.runtimeVersion,
+    deviceClass: classifyThreadDevice(globalThis.navigator?.hardwareConcurrency)
+  };
+}
+
+async function waitForQuietEditor(signal: AbortSignal): Promise<void> {
+  while (backgroundEmbeddingBatches.snapshot().idleForMs < BACKGROUND_BATCH_IDLE_MS) {
+    await delay(100, signal);
+  }
+}
+
+function formatThreadDecision(result: ThreadBenchmarkResult): string {
+  const threads = result.decision.threads;
+  return threads === 0
+    ? "Automatic threads matched the tested options within noise. The sanitised report was copied."
+    : `Selected ${threads} local WASM thread${threads === 1 ? "" : "s"}. The sanitised report was copied.`;
+}
+
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = (): void => {
+      globalThis.clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The operation was cancelled.", "AbortError");
 }
 
 async function copyJson(value: unknown): Promise<void> {

@@ -1,11 +1,52 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
+  DELETE_INDEX_COMMAND_ID,
+  DOWNLOAD_MODEL_COMMAND_ID,
   PLUGIN_ID,
-  SHOW_SUGGESTIONS_COMMAND_ID
+  REBUILD_INDEX_COMMAND_ID,
+  REMOVE_MODEL_COMMAND_ID,
+  RESET_BACKGROUND_TUNING_COMMAND_ID,
+  RUN_RELEVANCE_EVALUATION_COMMAND_ID,
+  SHOW_INDEX_STATUS_COMMAND_ID,
+  SHOW_SUGGESTIONS_COMMAND_ID,
+  START_DIAGNOSTICS_COMMAND_ID,
+  STOP_DIAGNOSTICS_COMMAND_ID,
+  TUNE_MODEL_THREADS_COMMAND_ID
 } from "../../src/constants.ts";
 
+const COMMAND_IDS = [
+  SHOW_SUGGESTIONS_COMMAND_ID,
+  SHOW_INDEX_STATUS_COMMAND_ID,
+  REBUILD_INDEX_COMMAND_ID,
+  DELETE_INDEX_COMMAND_ID,
+  DOWNLOAD_MODEL_COMMAND_ID,
+  REMOVE_MODEL_COMMAND_ID,
+  TUNE_MODEL_THREADS_COMMAND_ID,
+  RESET_BACKGROUND_TUNING_COMMAND_ID,
+  START_DIAGNOSTICS_COMMAND_ID,
+  COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
+  STOP_DIAGNOSTICS_COMMAND_ID,
+  RUN_RELEVANCE_EVALUATION_COMMAND_ID
+];
+
 test("command ids are short local identifiers", () => {
-  assert.equal(SHOW_SUGGESTIONS_COMMAND_ID, "show-suggestions");
-  assert.equal(SHOW_SUGGESTIONS_COMMAND_ID.includes(PLUGIN_ID), false);
+  assert.deepEqual(COMMAND_IDS, [
+    "show-suggestions",
+    "show-index-status",
+    "rebuild-index",
+    "delete-index",
+    "download-model",
+    "remove-model",
+    "tune-model-threads",
+    "reset-background-tuning",
+    "start-diagnostics",
+    "copy-diagnostics-report",
+    "stop-diagnostics",
+    "run-relevance-evaluation"
+  ]);
+  for (const id of COMMAND_IDS) {
+    assert.equal(id.includes(PLUGIN_ID), false);
+  }
 });

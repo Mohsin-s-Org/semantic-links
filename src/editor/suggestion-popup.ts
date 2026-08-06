@@ -144,9 +144,7 @@ function createPopupTooltip(
       dom.className = "semantic-links-popup";
       dom.setAttribute("role", "listbox");
       dom.setAttribute("aria-label", "Semantic link suggestions");
-      dom.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-      });
+      dom.addEventListener("mousedown", (event) => event.preventDefault());
 
       const header = dom.createDiv({ cls: "semantic-links-popup__header" });
       header.createSpan({
@@ -155,10 +153,7 @@ function createPopupTooltip(
       });
       const closeButton = header.createEl("button", {
         cls: "semantic-links-popup__close",
-        attr: {
-          type: "button",
-          "aria-label": "Close suggestions"
-        },
+        attr: { type: "button", "aria-label": "Close suggestions" },
         text: "×"
       });
       closeButton.addEventListener("click", () => hideSuggestions(view));
@@ -176,12 +171,11 @@ function createPopupTooltip(
             "aria-selected": selected ? "true" : "false"
           }
         });
-        const title = suggestion.targetHeading === null
-          ? suggestion.targetTitle
-          : `${suggestion.targetTitle} › ${suggestion.targetHeading}`;
         button.createDiv({
           cls: "semantic-links-popup__title",
-          text: title
+          text: suggestion.targetHeading === null
+            ? suggestion.targetTitle
+            : `${suggestion.targetTitle} › ${suggestion.targetHeading}`
         });
         button.createDiv({
           cls: "semantic-links-popup__meta",
@@ -193,9 +187,7 @@ function createPopupTooltip(
             text: suggestion.preview
           });
         }
-        button.addEventListener("click", () => {
-          handler.accept(view, popup, suggestion);
-        });
+        button.addEventListener("click", () => handler.accept(view, popup, suggestion));
       });
 
       dom.createDiv({
@@ -259,7 +251,8 @@ function formatKinds(kinds: readonly LexicalMatchKind[]): string {
     alias: "alias",
     heading: "heading",
     tag: "tag",
-    body: "note text"
+    body: "note text",
+    semantic: "semantic"
   };
   return kinds.map((kind) => labels[kind]).join(" + ");
 }

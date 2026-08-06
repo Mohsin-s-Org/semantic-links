@@ -5,6 +5,7 @@ const BACKTICK_FENCE_PATTERN = /^[\t ]{0,3}`{3,}[^\n]*\n[\s\S]*?^[\t ]{0,3}`{3,}
 const TILDE_FENCE_PATTERN = /^[\t ]{0,3}~{3,}[^\n]*\n[\s\S]*?^[\t ]{0,3}~{3,}[\t ]*$/gmu;
 const UNCLOSED_FENCE_PATTERN = /^[\t ]{0,3}(?:`{3,}|~{3,})[^\n]*(?:\n[\s\S]*)?$/gmu;
 const FRONTMATTER_PATTERN = /^---[\t ]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/u;
+const HTML_CONTAINER_PATTERN = /<(address|article|aside|blockquote|details|dialog|div|dl|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|iframe|main|menu|nav|object|ol|p|pre|script|section|style|summary|table|template|ul)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
 const ENGLISH_STOP_WORDS = new Set([
   "and", "are", "but", "for", "from", "has", "have", "into", "not", "that",
   "the", "their", "then", "there", "these", "they", "this", "through", "was",
@@ -85,6 +86,7 @@ export function stripMarkdownForLexicalIndex(markdown: string): string {
     .replace(UNCLOSED_FENCE_PATTERN, " ")
     .replace(/<!--[\s\S]*?-->/gu, " ")
     .replace(/^\s*\$\$[\s\S]*?^\s*\$\$\s*$/gmu, " ")
+    .replace(HTML_CONTAINER_PATTERN, " ")
     .replace(/`+[^\n]*?`+/gu, " ")
     .replace(/(^|[^\\$])\$(?!\$)[^\n$]+\$/gmu, "$1 ")
     .replace(/!\[\[[^\]\n]+\]\]/gu, " ")

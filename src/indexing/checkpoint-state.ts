@@ -15,17 +15,19 @@ export const DEFAULT_CHECKPOINT_POLICY: Readonly<CheckpointPolicy> = Object.free
 });
 
 export class CoalescedCheckpointState {
+  private readonly policy: CheckpointPolicy;
   private dirtyValue = false;
   private checkpointingValue = false;
   private pendingChangesValue = 0;
 
-  constructor(private readonly policy: CheckpointPolicy = DEFAULT_CHECKPOINT_POLICY) {
+  constructor(policy: CheckpointPolicy = DEFAULT_CHECKPOINT_POLICY) {
     if (!Number.isFinite(policy.idleMs) || policy.idleMs < 0) {
       throw new Error("Checkpoint idle delay must be a non-negative number.");
     }
     if (!Number.isInteger(policy.changeThreshold) || policy.changeThreshold < 1) {
       throw new Error("Checkpoint change threshold must be a positive integer.");
     }
+    this.policy = policy;
   }
 
   get current(): CheckpointStateSnapshot {

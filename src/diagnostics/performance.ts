@@ -255,16 +255,6 @@ function readMemoryUsage(): Record<string, number> {
     copyFinite(result, "js_heap_total", performanceMemory.totalJSHeapSize);
     copyFinite(result, "js_heap_limit", performanceMemory.jsHeapSizeLimit);
   }
-
-  const processLike = (globalThis as { process?: {
-    memoryUsage?: () => Record<string, unknown>;
-  } }).process;
-  const processMemory = processLike?.memoryUsage?.();
-  if (processMemory !== undefined) {
-    for (const [name, value] of Object.entries(processMemory)) {
-      copyFinite(result, `process_${normalizeName(name)}`, value);
-    }
-  }
   return result;
 }
 
@@ -272,10 +262,6 @@ function copyFinite(destination: Record<string, number>, name: string, value: un
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     destination[name] = value;
   }
-}
-
-function normalizeName(value: string): string {
-  return value.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
 }
 
 function validateMetricName(name: string): void {

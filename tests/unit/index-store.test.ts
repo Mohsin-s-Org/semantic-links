@@ -151,7 +151,10 @@ test("restores the previous checksum-verified generation after corruption", asyn
   await store.write(createSnapshot(1, "stable"));
   await store.write(createSnapshot(2, "current"));
   const current = await adapter.readBinary(`${ROOT}/vectors.f32`);
-  new Uint8Array(current)[0] ^= 0xff;
+  const bytes = new Uint8Array(current);
+  const first = bytes[0];
+  assert.ok(first !== undefined);
+  bytes[0] = first ^ 0xff;
   await adapter.writeBinary(`${ROOT}/vectors.f32`, current);
 
   const recovered = await createStore(adapter).open();

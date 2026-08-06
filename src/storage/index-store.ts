@@ -7,19 +7,24 @@ import type {
   ModelDescriptor
 } from "../indexing/types.ts";
 import { isRecord } from "../utils/validation.ts";
+import {
+  IndexJournal,
+  type IndexJournalDelta,
+  type IndexJournalIdentity,
+  type JournalReplayResult,
+  type JournalStorageAdapter
+} from "./index-journal.ts";
 
-export interface IndexStorageAdapter {
-  exists(path: string): Promise<boolean>;
-  read(path: string): Promise<string>;
+export interface IndexStorageAdapter extends JournalStorageAdapter {
   readBinary(path: string): Promise<ArrayBuffer>;
-  write(path: string, data: string): Promise<void>;
   writeBinary(path: string, data: ArrayBuffer): Promise<void>;
   mkdir(path: string): Promise<void>;
   rmdir(path: string, recursive: boolean): Promise<void>;
-  remove(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   copy(oldPath: string, newPath: string): Promise<void>;
 }
+
+export interface IndexOpenResult extends JournalReplayResult {}
 
 const DATA_FILES = ["documents.json", "chunks.json", "vectors.f32"] as const;
 const ALL_FILES = ["manifest.json", ...DATA_FILES] as const;
@@ -28,6 +33,7 @@ export class PersistentIndexStore {
   private readonly adapter: IndexStorageAdapter;
   private readonly rootPath: string;
   private readonly createEmptyManifest: () => IndexManifest;
+  private readonly journal: IndexJournal;
 
   constructor(
     adapter: IndexStorageAdapter,
@@ -37,6 +43,7 @@ export class PersistentIndexStore {
     this.adapter = adapter;
     this.rootPath = rootPath;
     this.createEmptyManifest = createEmptyManifest;
+    this.journal = new IndexJournal(adapter, rootPath);
   }
 
   async open(): Promise<IndexSnapshot> {
@@ -47,13 +54,28 @@ export class PersistentIndexStore {
     }
 
     const snapshot = await this.readSnapshot("");
-    validateSnapshot(snapshot);
+    validateIndexSnapshot(snapshot);
     return snapshot;
+  }
+
+  async openWithJournal(): Promise<IndexOpenResult> {
+    const snapshot = await this.open();
+    const replayed = await this.journal.replay(snapshot, identityFromSnapshot(snapshot));
+    validateIndexSnapshot(replayed.snapshot);
+    return replayed;
+  }
+
+  async appendJournal(
+    delta: IndexJournalDelta,
+    identity: IndexJournalIdentity
+  ): Promise<number> {
+    await this.ensureDirectory();
+    return this.journal.append(delta, identity);
   }
 
   async write(snapshot: IndexSnapshot): Promise<IndexSnapshot> {
     const clean = normalizeSnapshot(snapshot, false);
-    validateSnapshot(clean);
+    validateIndexSnapshot(clean);
     await this.ensureDirectory();
     await this.backupStableGeneration();
 
@@ -64,17 +86,23 @@ export class PersistentIndexStore {
 
     try {
       await this.writeNextGeneration(clean);
-      validateSnapshot(await this.readSnapshot(".next"));
+      validateIndexSnapshot(await this.readSnapshot(".next"));
       await this.promoteNextGeneration();
       await this.cleanupSuffix("previous");
-      return clean;
     } catch (error) {
       await this.restorePreviousGeneration();
       throw error;
     }
+
+    // The full generation is authoritative now. A stale journal that could not
+    // be removed is rejected on the next open because its base generation no
+    // longer matches.
+    await this.journal.clear().catch(() => undefined);
+    return clean;
   }
 
   async delete(): Promise<void> {
+    await this.journal.clear().catch(() => undefined);
     if (await this.adapter.exists(this.rootPath)) {
       await this.adapter.rmdir(this.rootPath, true);
     }
@@ -234,6 +262,15 @@ export function createEmptyIndexManifest(
   };
 }
 
+function identityFromSnapshot(snapshot: IndexSnapshot): IndexJournalIdentity {
+  return {
+    baseGeneration: snapshot.manifest.generation,
+    vaultFingerprint: snapshot.manifest.vaultFingerprint,
+    scopeFingerprint: snapshot.manifest.scopeFingerprint,
+    model: snapshot.manifest.model
+  };
+}
+
 function normalizeSnapshot(snapshot: IndexSnapshot, dirty: boolean): IndexSnapshot {
   return {
     manifest: {
@@ -251,7 +288,7 @@ function normalizeSnapshot(snapshot: IndexSnapshot, dirty: boolean): IndexSnapsh
   };
 }
 
-function validateSnapshot(snapshot: IndexSnapshot): void {
+export function validateIndexSnapshot(snapshot: IndexSnapshot): void {
   const { manifest, documents, chunks, vectors } = snapshot;
   if (manifest.schemaVersion !== INDEX_SCHEMA_VERSION) {
     throw new Error(`Unsupported semantic index schema: ${manifest.schemaVersion}`);

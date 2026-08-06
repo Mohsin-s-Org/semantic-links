@@ -12,7 +12,8 @@ import {
   SHOW_INDEX_STATUS_COMMAND_ID,
   SHOW_SUGGESTIONS_COMMAND_ID,
   START_DIAGNOSTICS_COMMAND_ID,
-  STOP_DIAGNOSTICS_COMMAND_ID
+  STOP_DIAGNOSTICS_COMMAND_ID,
+  TUNE_MODEL_THREADS_COMMAND_ID
 } from "../../src/constants.ts";
 
 const COMMAND_IDS = [
@@ -22,6 +23,7 @@ const COMMAND_IDS = [
   DELETE_INDEX_COMMAND_ID,
   DOWNLOAD_MODEL_COMMAND_ID,
   REMOVE_MODEL_COMMAND_ID,
+  TUNE_MODEL_THREADS_COMMAND_ID,
   RESET_BACKGROUND_TUNING_COMMAND_ID,
   START_DIAGNOSTICS_COMMAND_ID,
   COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
@@ -37,6 +39,7 @@ test("command ids are short local identifiers", () => {
     "delete-index",
     "download-model",
     "remove-model",
+    "tune-model-threads",
     "reset-background-tuning",
     "start-diagnostics",
     "copy-diagnostics-report",

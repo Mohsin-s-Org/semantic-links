@@ -63,8 +63,8 @@ interface StoredDocumentState {
 }
 
 interface StoredJournalDelta {
-  upserts: StoredDocumentState[];
   removals: string[];
+  upserts: StoredDocumentState[];
 }
 
 interface JournalRecordPayload {
@@ -91,13 +91,15 @@ const JOURNAL_FILE = "journal.ndjson";
 const MAX_JOURNAL_RECORDS = 10_000;
 
 export class IndexJournal {
+  private readonly adapter: JournalStorageAdapter;
+  private readonly rootPath: string;
   private initializedIdentity: string | null = null;
   private lastSequence = 0;
 
-  constructor(
-    private readonly adapter: JournalStorageAdapter,
-    private readonly rootPath: string
-  ) {}
+  constructor(adapter: JournalStorageAdapter, rootPath: string) {
+    this.adapter = adapter;
+    this.rootPath = rootPath;
+  }
 
   async replay(
     snapshot: IndexSnapshot,
@@ -270,22 +272,20 @@ async function parseHeader(line: string): Promise<StoredJournalHeader> {
 }
 
 function parseHeaderPayload(value: Record<string, unknown>): JournalHeaderPayload {
+  const baseGeneration = readInteger(value, "baseGeneration");
   if (
     value["type"] !== "header"
     || value["schemaVersion"] !== JOURNAL_SCHEMA_VERSION
-    || !Number.isInteger(value["baseGeneration"])
-    || (value["baseGeneration"] as number) < 0
-    || typeof value["vaultFingerprint"] !== "string"
-    || typeof value["scopeFingerprint"] !== "string"
+    || baseGeneration < 0
   ) {
     throw new Error("Semantic index journal identity is invalid.");
   }
   return {
     type: "header",
     schemaVersion: JOURNAL_SCHEMA_VERSION,
-    baseGeneration: value["baseGeneration"] as number,
-    vaultFingerprint: value["vaultFingerprint"],
-    scopeFingerprint: value["scopeFingerprint"],
+    baseGeneration,
+    vaultFingerprint: readString(value, "vaultFingerprint"),
+    scopeFingerprint: readString(value, "scopeFingerprint"),
     model: parseModel(value["model"])
   };
 }
@@ -307,12 +307,11 @@ function parseRecordPayload(
   value: Record<string, unknown>,
   expectedSequence: number
 ): JournalRecordPayload {
+  const createdAt = readNumber(value, "createdAt");
   if (
     value["type"] !== "delta"
     || value["schemaVersion"] !== JOURNAL_SCHEMA_VERSION
     || value["sequence"] !== expectedSequence
-    || typeof value["createdAt"] !== "number"
-    || !Number.isFinite(value["createdAt"])
   ) {
     throw new Error("Semantic index journal sequence is invalid.");
   }
@@ -320,7 +319,7 @@ function parseRecordPayload(
     type: "delta",
     schemaVersion: JOURNAL_SCHEMA_VERSION,
     sequence: expectedSequence,
-    createdAt: value["createdAt"],
+    createdAt,
     delta: parseStoredDelta(value["delta"])
   };
 }
@@ -336,17 +335,17 @@ function parseStoredDelta(value: unknown): StoredJournalDelta {
     return path;
   });
   const upserts = value["upserts"].map(parseStoredDocumentState);
-  return { upserts, removals };
+  return { removals, upserts };
 }
 
 function parseStoredDocumentState(value: unknown): StoredDocumentState {
-  if (!isRecord(value) || !isRecord(value["document"]) || !Array.isArray(value["chunks"])) {
+  if (!isRecord(value) || !Array.isArray(value["chunks"])) {
     throw new Error("Semantic index journal document state is invalid.");
   }
   return {
-    document: value["document"] as unknown as IndexedDocument,
+    document: parseDocument(value["document"]),
     chunks: value["chunks"].map((entry) => {
-      if (!isRecord(entry) || !isRecord(entry["chunk"])) {
+      if (!isRecord(entry)) {
         throw new Error("Semantic index journal chunk state is invalid.");
       }
       const vectorBase64 = entry["vectorBase64"];
@@ -354,10 +353,55 @@ function parseStoredDocumentState(value: unknown): StoredDocumentState {
         throw new Error("Semantic index journal vector encoding is invalid.");
       }
       return {
-        chunk: entry["chunk"] as unknown as IndexedChunk,
+        chunk: parseChunk(entry["chunk"]),
         vectorBase64
       };
     })
+  };
+}
+
+function parseDocument(value: unknown): IndexedDocument {
+  if (!isRecord(value) || !Array.isArray(value["headings"])) {
+    throw new Error("Semantic index journal document is invalid.");
+  }
+  return {
+    id: readString(value, "id"),
+    path: readString(value, "path"),
+    title: readString(value, "title"),
+    aliases: readStrings(value, "aliases"),
+    tags: readStrings(value, "tags"),
+    headings: value["headings"].map((heading) => {
+      if (!isRecord(heading)) {
+        throw new Error("Semantic index journal heading is invalid.");
+      }
+      return {
+        text: readString(heading, "text"),
+        level: readInteger(heading, "level")
+      };
+    }),
+    outgoingPaths: readStrings(value, "outgoingPaths"),
+    contentHash: readString(value, "contentHash"),
+    modifiedAt: readNumber(value, "modifiedAt"),
+    chunkIds: readStrings(value, "chunkIds")
+  };
+}
+
+function parseChunk(value: unknown): IndexedChunk {
+  if (!isRecord(value)) {
+    throw new Error("Semantic index journal chunk is invalid.");
+  }
+  return {
+    id: readString(value, "id"),
+    documentId: readString(value, "documentId"),
+    headingPath: readStrings(value, "headingPath"),
+    startOffset: readInteger(value, "startOffset"),
+    endOffset: readInteger(value, "endOffset"),
+    startLine: readInteger(value, "startLine"),
+    endLine: readInteger(value, "endLine"),
+    textPreview: readString(value, "textPreview"),
+    lexicalTerms: readStrings(value, "lexicalTerms"),
+    embeddingText: readString(value, "embeddingText"),
+    vectorRow: readInteger(value, "vectorRow")
   };
 }
 
@@ -371,7 +415,12 @@ function storeDelta(delta: IndexJournalDelta): StoredJournalDelta {
         chunks: [...state.chunks]
           .sort((left, right) => left.chunk.id.localeCompare(right.chunk.id))
           .map(({ chunk, vector }) => ({
-            chunk: { ...chunk, headingPath: [...chunk.headingPath], lexicalTerms: [...chunk.lexicalTerms], vectorRow: -1 },
+            chunk: {
+              ...chunk,
+              headingPath: [...chunk.headingPath],
+              lexicalTerms: [...chunk.lexicalTerms],
+              vectorRow: -1
+            },
             vectorBase64: vector === null ? null : encodeVector(vector)
           }))
       }))
@@ -419,6 +468,11 @@ function applyRecords(snapshot: IndexSnapshot, records: readonly StoredJournalRe
           const vector = decodeVector(stored.vectorBase64);
           if (vector.length !== dimensions) {
             throw new Error(`Semantic index journal vector dimensions are invalid: ${chunk.id}`);
+          }
+          for (const value of vector) {
+            if (!Number.isFinite(value)) {
+              throw new Error(`Semantic index journal vector contains a non-finite value: ${chunk.id}`);
+            }
           }
           vectors.set(chunk.id, vector);
         }
@@ -473,25 +527,20 @@ function parseModel(value: unknown): ModelDescriptor | null {
   if (value === null) {
     return null;
   }
-  if (
-    !isRecord(value)
-    || typeof value["id"] !== "string"
-    || typeof value["revision"] !== "string"
-    || typeof value["quantization"] !== "string"
-    || !Number.isInteger(value["dimensions"])
-    || (value["dimensions"] as number) < 1
-    || typeof value["tokenizerVersion"] !== "string"
-    || typeof value["runtimeVersion"] !== "string"
-  ) {
+  if (!isRecord(value)) {
     throw new Error("Semantic index journal model identity is invalid.");
   }
+  const dimensions = readInteger(value, "dimensions");
+  if (dimensions < 1) {
+    throw new Error("Semantic index journal model dimensions are invalid.");
+  }
   return {
-    id: value["id"],
-    revision: value["revision"],
-    quantization: value["quantization"],
-    dimensions: value["dimensions"] as number,
-    tokenizerVersion: value["tokenizerVersion"],
-    runtimeVersion: value["runtimeVersion"]
+    id: readString(value, "id"),
+    revision: readString(value, "revision"),
+    quantization: readString(value, "quantization"),
+    dimensions,
+    tokenizerVersion: readString(value, "tokenizerVersion"),
+    runtimeVersion: readString(value, "runtimeVersion")
   };
 }
 
@@ -555,4 +604,36 @@ function cloneChunk(chunk: IndexedChunk): IndexedChunk {
     headingPath: [...chunk.headingPath],
     lexicalTerms: [...chunk.lexicalTerms]
   };
+}
+
+function readString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  if (typeof value !== "string") {
+    throw new Error(`Expected ${key} to be a string.`);
+  }
+  return value;
+}
+
+function readStrings(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    throw new Error(`Expected ${key} to be a string array.`);
+  }
+  return [...value];
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Expected ${key} to be a finite number.`);
+  }
+  return value;
+}
+
+function readInteger(record: Record<string, unknown>, key: string): number {
+  const value = readNumber(record, key);
+  if (!Number.isInteger(value)) {
+    throw new Error(`Expected ${key} to be an integer.`);
+  }
+  return value;
 }

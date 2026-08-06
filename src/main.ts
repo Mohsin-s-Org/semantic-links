@@ -50,6 +50,10 @@ import {
   isMarkdownFile
 } from "./lexical/vault-index.ts";
 import { mergeHybridSuggestions } from "./retrieval/hybrid.ts";
+import {
+  hasEnabledMatching,
+  shouldRunLexicalMatching
+} from "./retrieval/matching-policy.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
 import { isFileExcluded } from "./scope/exclusions.ts";
 import { createDefaultSettings } from "./settings/defaults.ts";
@@ -113,6 +117,7 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
       this.controllers.clearActive();
       this.controllers.invalidateAll();
+      this.onEditorActivity();
     }));
 
     this.addCommand({
@@ -199,6 +204,8 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
   ): Promise<SemanticMatch[]> {
     return Promise.resolve([]);
   }
+
+  protected onEditorActivity(): void {}
 
   private async initializeIndexes(): Promise<void> {
     await this.initializeLexicalIndex();
@@ -323,13 +330,14 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
     controller: EditorSuggestionController,
     documentVersion: number
   ): void {
+    this.onEditorActivity();
     hideSuggestions(view);
     const index = this.lexicalIndex;
     if (
       index === null
       || !index.ready
       || !this.settings.automaticSuggestions
-      || !this.settings.lexicalMatchingEnabled
+      || !hasEnabledMatching(this.settings)
     ) {
       return;
     }
@@ -364,8 +372,8 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
       new Notice("The local lexical index is still being prepared.");
       return;
     }
-    if (!this.settings.lexicalMatchingEnabled) {
-      new Notice("Enable lexical matching in Semantic Links settings first.");
+    if (!hasEnabledMatching(this.settings)) {
+      new Notice("Enable lexical or semantic matching in Semantic Links settings first.");
       return;
     }
     if (this.isExcluded(source)) {
@@ -423,13 +431,15 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
       context,
       ticket.key.mode
     );
-    const lexical = index.search({
-      anchorText: context.anchor.text,
-      contextText: context.searchText,
-      sourcePath: source.path,
-      limit: this.settings.maxSuggestions,
-      minimumScore: this.settings.minimumConfidence
-    });
+    const lexical = shouldRunLexicalMatching(this.settings)
+      ? index.search({
+          anchorText: context.anchor.text,
+          contextText: context.searchText,
+          sourcePath: source.path,
+          limit: this.settings.maxSuggestions,
+          minimumScore: this.settings.minimumConfidence
+        })
+      : [];
     if (!controller.acceptResult(ticket, currentKey)) {
       return;
     }

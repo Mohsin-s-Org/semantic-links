@@ -13,6 +13,7 @@ interface QueueEntry<T> {
 export class InferenceScheduler {
   private readonly queue: Array<QueueEntry<unknown>> = [];
   private running = false;
+  private runningPriority: number | null = null;
 
   run<T>(priority: number, task: Task<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -29,6 +30,11 @@ export class InferenceScheduler {
     });
   }
 
+  hasPriority(priority: number): boolean {
+    return this.runningPriority === priority
+      || this.queue.some((entry) => entry.priority === priority);
+  }
+
   private async drain(): Promise<void> {
     if (this.running) {
       return;
@@ -40,6 +46,7 @@ export class InferenceScheduler {
         if (entry === undefined) {
           break;
         }
+        this.runningPriority = entry.priority;
         semanticDiagnostics.setGauge("inference.queue_depth", this.queue.length);
         const lane = entry.priority === 0 ? "query" : "background";
         semanticDiagnostics.record(
@@ -52,11 +59,13 @@ export class InferenceScheduler {
         } catch (error) {
           entry.reject(error);
         } finally {
+          this.runningPriority = null;
           finish();
         }
       }
     } finally {
       this.running = false;
+      this.runningPriority = null;
       semanticDiagnostics.setGauge("inference.queue_depth", this.queue.length);
     }
   }

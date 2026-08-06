@@ -23,14 +23,16 @@ import {
   approvedThreadCandidates,
   classifyThreadDevice,
   isThreadTuningCompatible,
-  type ThreadTuningIdentity,
-  type WasmThreadCount
+  type ThreadTuningIdentity
 } from "./embeddings/thread-tuning.ts";
 import { runLocalRelevanceEvaluation } from "./evaluation/local-evaluation.ts";
 import {
   backgroundEmbeddingBatches
 } from "./indexing/adaptive-embedding-batches.ts";
 import BaseSemanticLinksPlugin from "./main.ts";
+import {
+  buildSemanticQueryContext
+} from "./retrieval/semantic-query-context.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
 import { ModelRemovalModal } from "./ui/model-removal-modal.ts";
 import { ModelSetupModal } from "./ui/model-setup-modal.ts";
@@ -164,15 +166,14 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
         semanticDiagnostics.increment("query.semantic_unavailable");
         return [];
       }
-      const query = [
-        `Note: ${file.basename}`,
-        context.sentence,
-        context.paragraph
-      ].filter((part, index, values) => part.length > 0 && values.indexOf(part) === index)
-        .join("\n")
-        .slice(0, 1_200);
-      semanticDiagnostics.setGauge("query.context_characters", query.length);
-      const vector = await this.modelManager.embedQuery(query, signal);
+      const query = buildSemanticQueryContext(file.basename, context);
+      semanticDiagnostics.setGauge("query.context_characters", query.text.length);
+      semanticDiagnostics.setGauge("query.context_components", query.componentCount);
+      semanticDiagnostics.setGauge(
+        "query.explicit_selection",
+        context.selection === null ? 0 : 1
+      );
+      const vector = await this.modelManager.embedQuery(query.text, signal);
       const matches = vector === null
         ? []
         : await manager.searchSemantic(vector, sourcePath, 40, signal);
@@ -303,11 +304,13 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   }
 
   async useAutomaticModelThreads(): Promise<void> {
-    this.threadTuningController?.abort(
-      new DOMException("Automatic thread mode was selected.", "AbortError")
-    );
+    const running = this.threadTuningController;
+    if (running !== null) {
+      running.abort(new DOMException("Automatic thread mode was selected.", "AbortError"));
+      new Notice("Cancelling thread tuning and restoring automatic inference.");
+      return;
+    }
     await this.persistAutomaticThreadProfile();
-    this.modelManager.configureThreads(0);
     if (
       this.settings.semanticModelInstalled
       && this.settings.semanticModelEnabled
@@ -484,10 +487,13 @@ async function waitForQuietEditor(signal: AbortSignal): Promise<void> {
 }
 
 function formatThreadDecision(result: ThreadBenchmarkResult): string {
-  const threads = result.decision.threads;
-  return threads === 0
+  const { threads, reason } = result.decision;
+  if (threads !== 0) {
+    return `Selected ${threads} local WASM thread${threads === 1 ? "" : "s"}. The sanitised report was copied.`;
+  }
+  return reason === "automatic-within-noise"
     ? "Automatic threads matched the tested options within noise. The sanitised report was copied."
-    : `Selected ${threads} local WASM thread${threads === 1 ? "" : "s"}. The sanitised report was copied.`;
+    : "The thread benchmark was inconclusive, so automatic threads remain enabled. The sanitised report was copied.";
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -495,14 +501,14 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
     return Promise.reject(abortError(signal));
   }
   return new Promise<void>((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, milliseconds);
     const abort = (): void => {
       globalThis.clearTimeout(timer);
       reject(abortError(signal));
     };
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
     signal.addEventListener("abort", abort, { once: true });
   });
 }

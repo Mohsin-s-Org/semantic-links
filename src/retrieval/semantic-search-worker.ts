@@ -1,3 +1,4 @@
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import { isRecord } from "../utils/validation.ts";
 
 export interface WorkerSearchResult {
@@ -9,6 +10,7 @@ interface PendingSearch {
   resolve(value: WorkerSearchResult[]): void;
   reject(reason: unknown): void;
   removeAbortListener(): void;
+  finish(): void;
 }
 
 export class SemanticSearchWorker {
@@ -25,6 +27,7 @@ export class SemanticSearchWorker {
     ) {
       this.worker = null;
       this.workerUrl = null;
+      semanticDiagnostics.increment("search.worker_unavailable");
       return;
     }
     this.workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], {
@@ -35,6 +38,7 @@ export class SemanticSearchWorker {
       this.handleMessage(event.data);
     };
     this.worker.onerror = () => {
+      semanticDiagnostics.increment("search.worker_error");
       this.rejectAll(new Error("The semantic search worker failed."));
     };
   }
@@ -47,14 +51,28 @@ export class SemanticSearchWorker {
     if (this.worker === null) {
       return;
     }
-    const vectorBuffer = transferableBuffer(vectors);
-    const documentBuffer = transferableBuffer(documents);
-    this.worker.postMessage({
-      type: "update",
-      vectors: vectorBuffer,
-      documents: documentBuffer,
-      dimensions
-    }, [vectorBuffer, documentBuffer]);
+    const finish = semanticDiagnostics.startSpan("search.worker_update_post_ms");
+    try {
+      semanticDiagnostics.setGauge(
+        "search.worker_vector_count",
+        dimensions > 0 ? vectors.length / dimensions : 0
+      );
+      semanticDiagnostics.setGauge("search.worker_dimensions", dimensions);
+      semanticDiagnostics.setGauge(
+        "search.worker_transfer_bytes",
+        vectors.byteLength + documents.byteLength
+      );
+      const vectorBuffer = transferableBuffer(vectors);
+      const documentBuffer = transferableBuffer(documents);
+      this.worker.postMessage({
+        type: "update",
+        vectors: vectorBuffer,
+        documents: documentBuffer,
+        dimensions
+      }, [vectorBuffer, documentBuffer]);
+    } finally {
+      finish();
+    }
   }
 
   search(
@@ -70,17 +88,26 @@ export class SemanticSearchWorker {
       return Promise.reject(abortError(signal));
     }
     const id = ++this.requestId;
-    const copy = new Float32Array(query);
+    const copy = semanticDiagnostics.measureSync("search.query_copy_ms", () => {
+      return new Float32Array(query);
+    });
     const queryBuffer = transferableBuffer(copy);
+    const finish = semanticDiagnostics.startSpan("search.worker_round_trip_ms");
+    semanticDiagnostics.setGauge("search.worker_query_bytes", query.byteLength);
+    semanticDiagnostics.setGauge("search.worker_limit", limit);
     return new Promise<WorkerSearchResult[]>((resolve, reject) => {
       const abort = (): void => {
+        const pending = this.pending.get(id);
         this.pending.delete(id);
+        pending?.finish();
+        semanticDiagnostics.increment("search.worker_cancelled");
         reject(abortError(signal));
       };
       signal.addEventListener("abort", abort, { once: true });
       this.pending.set(id, {
         resolve,
         reject,
+        finish,
         removeAbortListener: () => signal.removeEventListener("abort", abort)
       });
       this.worker?.postMessage({
@@ -114,14 +141,18 @@ export class SemanticSearchWorker {
       || !(scores instanceof Float32Array)
       || rows.length !== scores.length
     ) {
+      semanticDiagnostics.increment("search.worker_invalid_result");
       return;
     }
     const pending = this.pending.get(id);
     if (pending === undefined) {
+      semanticDiagnostics.increment("search.worker_stale_result");
       return;
     }
     this.pending.delete(id);
     pending.removeAbortListener();
+    pending.finish();
+    semanticDiagnostics.setGauge("search.worker_result_count", rows.length);
     pending.resolve(Array.from(rows, (row, index) => ({
       row,
       score: scores[index] ?? Number.NEGATIVE_INFINITY
@@ -131,6 +162,7 @@ export class SemanticSearchWorker {
   private rejectAll(error: Error): void {
     for (const pending of this.pending.values()) {
       pending.removeAbortListener();
+      pending.finish();
       pending.reject(error);
     }
     this.pending.clear();

@@ -9,6 +9,10 @@ import {
   MIN_SUGGESTIONS,
   SETTINGS_VERSION
 } from "../constants.ts";
+import type {
+  ThreadDeviceClass,
+  WasmThreadCount
+} from "../embeddings/thread-tuning.ts";
 import {
   isRecord,
   readBoolean,
@@ -19,10 +23,13 @@ import {
 import { DEFAULT_SETTINGS, createDefaultSettings } from "./defaults.ts";
 import type {
   SemanticLinksSettings,
+  SemanticThreadMode,
   SettingsLoadResult
 } from "./types.ts";
 
 const LINK_PATH_MODES = ["shortest", "full"] as const;
+const SEMANTIC_THREAD_MODES = ["automatic", "tuned"] as const;
+const THREAD_DEVICE_CLASSES = ["unknown", "1-2", "3-4", "5-8", "9+"] as const;
 const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
   "settingsVersion",
   "automaticSuggestions",
@@ -30,6 +37,11 @@ const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
   "semanticIndexingEnabled",
   "semanticModelEnabled",
   "semanticModelInstalled",
+  "semanticThreadMode",
+  "semanticThreadCount",
+  "semanticThreadModelRevision",
+  "semanticThreadRuntimeVersion",
+  "semanticThreadDeviceClass",
   "backgroundEmbeddingBatchLimit",
   "debounceMs",
   "maxSuggestions",
@@ -58,6 +70,7 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
     "semanticModelInstalled",
     DEFAULT_SETTINGS.semanticModelInstalled
   );
+  const threadProfile = readThreadProfile(input);
   const settings: SemanticLinksSettings = {
     settingsVersion: SETTINGS_VERSION,
     automaticSuggestions: readBoolean(
@@ -77,6 +90,7 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
       modelInstalled
     ),
     semanticModelInstalled: modelInstalled,
+    ...threadProfile,
     backgroundEmbeddingBatchLimit: Math.round(readClampedNumber(
       input,
       "backgroundEmbeddingBatchLimit",
@@ -139,6 +153,60 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
   };
 }
 
+function readThreadProfile(record: Record<string, unknown>): Pick<
+  SemanticLinksSettings,
+  | "semanticThreadMode"
+  | "semanticThreadCount"
+  | "semanticThreadModelRevision"
+  | "semanticThreadRuntimeVersion"
+  | "semanticThreadDeviceClass"
+> {
+  const requestedMode = readEnum(
+    record,
+    "semanticThreadMode",
+    SEMANTIC_THREAD_MODES,
+    DEFAULT_SETTINGS.semanticThreadMode
+  );
+  const count = readThreadCount(record["semanticThreadCount"]);
+  const modelRevision = readOptionalString(record["semanticThreadModelRevision"]);
+  const runtimeVersion = readOptionalString(record["semanticThreadRuntimeVersion"]);
+  const deviceClass = readEnum(
+    record,
+    "semanticThreadDeviceClass",
+    THREAD_DEVICE_CLASSES,
+    DEFAULT_SETTINGS.semanticThreadDeviceClass
+  );
+  const mode: SemanticThreadMode = requestedMode === "tuned"
+    && count !== 0
+    && modelRevision.length > 0
+    && runtimeVersion.length > 0
+    ? "tuned"
+    : "automatic";
+  return mode === "tuned"
+    ? {
+        semanticThreadMode: mode,
+        semanticThreadCount: count,
+        semanticThreadModelRevision: modelRevision,
+        semanticThreadRuntimeVersion: runtimeVersion,
+        semanticThreadDeviceClass: deviceClass
+      }
+    : {
+        semanticThreadMode: "automatic",
+        semanticThreadCount: 0,
+        semanticThreadModelRevision: "",
+        semanticThreadRuntimeVersion: "",
+        semanticThreadDeviceClass: "unknown"
+      };
+}
+
+function readThreadCount(value: unknown): WasmThreadCount {
+  return value === 1 || value === 2 || value === 4 ? value : 0;
+}
+
+function readOptionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function readSemanticToggle(record: Record<string, unknown>): boolean {
   for (const key of [
     "semanticIndexingEnabled",
@@ -181,6 +249,11 @@ function matchesCurrentSettings(
     && record["semanticIndexingEnabled"] === settings.semanticIndexingEnabled
     && record["semanticModelEnabled"] === settings.semanticModelEnabled
     && record["semanticModelInstalled"] === settings.semanticModelInstalled
+    && record["semanticThreadMode"] === settings.semanticThreadMode
+    && record["semanticThreadCount"] === settings.semanticThreadCount
+    && record["semanticThreadModelRevision"] === settings.semanticThreadModelRevision
+    && record["semanticThreadRuntimeVersion"] === settings.semanticThreadRuntimeVersion
+    && record["semanticThreadDeviceClass"] === settings.semanticThreadDeviceClass
     && record["backgroundEmbeddingBatchLimit"] === settings.backgroundEmbeddingBatchLimit
     && record["debounceMs"] === settings.debounceMs
     && record["maxSuggestions"] === settings.maxSuggestions

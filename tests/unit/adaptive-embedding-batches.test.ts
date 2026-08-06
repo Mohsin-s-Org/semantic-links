@@ -143,7 +143,7 @@ function createController(
   return new AdaptiveEmbeddingBatchController({
     learnedLimit,
     now,
-    onLearnedLimit,
+    ...(onLearnedLimit === undefined ? {} : { onLearnedLimit }),
     policy: POLICY
   });
 }

@@ -1,11 +1,17 @@
 import { Notice } from "obsidian";
-import BaseSemanticLinksPlugin from "./main.ts";
 import {
+  COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
   DOWNLOAD_MODEL_COMMAND_ID,
-  REMOVE_MODEL_COMMAND_ID
+  REMOVE_MODEL_COMMAND_ID,
+  RUN_RELEVANCE_EVALUATION_COMMAND_ID,
+  START_DIAGNOSTICS_COMMAND_ID,
+  STOP_DIAGNOSTICS_COMMAND_ID
 } from "./constants.ts";
+import { semanticDiagnostics } from "./diagnostics/performance.ts";
 import type { SuggestionContext } from "./editor/context.ts";
 import { LocalModelManager } from "./embeddings/model-manager.ts";
+import { runLocalRelevanceEvaluation } from "./evaluation/local-evaluation.ts";
+import BaseSemanticLinksPlugin from "./main.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
 import { ModelRemovalModal } from "./ui/model-removal-modal.ts";
 import { ModelSetupModal } from "./ui/model-setup-modal.ts";
@@ -13,6 +19,7 @@ import { ModelSetupModal } from "./ui/model-setup-modal.ts";
 export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   private readonly semanticLifecycle = new AbortController();
   private readonly modelManager = new LocalModelManager();
+  private evaluationController: AbortController | null = null;
 
   override async onload(): Promise<void> {
     await super.onload();
@@ -27,6 +34,39 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       name: "Remove local semantic model and vectors",
       callback: () => this.requestModelRemoval()
     });
+    this.addCommand({
+      id: START_DIAGNOSTICS_COMMAND_ID,
+      name: "Start local semantic diagnostics",
+      callback: () => this.startDiagnostics()
+    });
+    this.addCommand({
+      id: COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
+      name: "Copy local semantic diagnostics report",
+      callback: () => {
+        void this.copyDiagnosticsReport(false).catch(() => {
+          new Notice("The local diagnostics report could not be copied.");
+        });
+      }
+    });
+    this.addCommand({
+      id: STOP_DIAGNOSTICS_COMMAND_ID,
+      name: "Stop diagnostics and copy report",
+      callback: () => {
+        void this.copyDiagnosticsReport(true).catch(() => {
+          new Notice("The local diagnostics report could not be copied.");
+        });
+      }
+    });
+    this.addCommand({
+      id: RUN_RELEVANCE_EVALUATION_COMMAND_ID,
+      name: "Run local semantic relevance evaluation",
+      callback: () => {
+        void this.runRelevanceEvaluation().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "The relevance evaluation failed.";
+          new Notice(message);
+        });
+      }
+    });
 
     this.app.workspace.onLayoutReady(() => {
       void this.loadCachedModel().catch(() => {
@@ -36,6 +76,11 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
   }
 
   override onunload(): void {
+    this.evaluationController?.abort();
+    this.evaluationController = null;
+    if (semanticDiagnostics.enabled) {
+      semanticDiagnostics.stop();
+    }
     this.semanticLifecycle.abort();
     this.modelManager.dispose();
     super.onunload();
@@ -46,30 +91,40 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     sourcePath: string,
     signal: AbortSignal
   ): Promise<SemanticMatch[]> {
-    if (!this.settings.semanticModelEnabled) {
-      return [];
+    const finish = semanticDiagnostics.startSpan("query.semantic_total_ms");
+    try {
+      if (!this.settings.semanticModelEnabled) {
+        semanticDiagnostics.increment("query.semantic_disabled");
+        return [];
+      }
+      const file = this.app.workspace.getActiveFile();
+      const manager = this.indexManager;
+      if (
+        file === null
+        || manager === null
+        || file.path !== sourcePath
+        || this.modelManager.client === null
+      ) {
+        semanticDiagnostics.increment("query.semantic_unavailable");
+        return [];
+      }
+      const query = [
+        `Note: ${file.basename}`,
+        context.sentence,
+        context.paragraph
+      ].filter((part, index, values) => part.length > 0 && values.indexOf(part) === index)
+        .join("\n")
+        .slice(0, 1_200);
+      semanticDiagnostics.setGauge("query.context_characters", query.length);
+      const vector = await this.modelManager.embedQuery(query, signal);
+      const matches = vector === null
+        ? []
+        : await manager.searchSemantic(vector, sourcePath, 40, signal);
+      semanticDiagnostics.setGauge("query.semantic_result_count", matches.length);
+      return matches;
+    } finally {
+      finish();
     }
-    const file = this.app.workspace.getActiveFile();
-    const manager = this.indexManager;
-    if (
-      file === null
-      || manager === null
-      || file.path !== sourcePath
-      || this.modelManager.client === null
-    ) {
-      return [];
-    }
-    const query = [
-      `Note: ${file.basename}`,
-      context.sentence,
-      context.paragraph
-    ].filter((part, index, values) => part.length > 0 && values.indexOf(part) === index)
-      .join("\n")
-      .slice(0, 1_200);
-    const vector = await this.modelManager.embedQuery(query, signal);
-    return vector === null
-      ? []
-      : manager.searchSemantic(vector, sourcePath, 40, signal);
   }
 
   openModelSetup(): void {
@@ -122,6 +177,58 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     await this.saveSettings();
   }
 
+  private startDiagnostics(): void {
+    semanticDiagnostics.start();
+    new Notice("Local semantic diagnostics started. No note content is recorded.");
+  }
+
+  private async copyDiagnosticsReport(stop: boolean): Promise<void> {
+    const report = stop ? semanticDiagnostics.stop() : semanticDiagnostics.report();
+    await copyJson(report);
+    new Notice(stop
+      ? "Diagnostics stopped and the sanitised report was copied."
+      : "The sanitised diagnostics report was copied.");
+  }
+
+  private async runRelevanceEvaluation(): Promise<void> {
+    if (this.evaluationController !== null) {
+      new Notice("A local relevance evaluation is already running.");
+      return;
+    }
+    const client = this.modelManager.client;
+    if (client === null) {
+      new Notice("Enable the local semantic model before running the relevance evaluation.");
+      return;
+    }
+
+    const controller = new AbortController();
+    this.evaluationController = controller;
+    const startedDiagnostics = !semanticDiagnostics.enabled;
+    if (startedDiagnostics) {
+      semanticDiagnostics.start();
+    }
+    new Notice("Running the 112-case local semantic relevance evaluation.");
+    try {
+      const relevance = await runLocalRelevanceEvaluation(client, controller.signal);
+      const performance = startedDiagnostics
+        ? semanticDiagnostics.stop()
+        : semanticDiagnostics.report();
+      await copyJson({
+        schemaVersion: 1,
+        relevance,
+        performance
+      });
+      new Notice("The local relevance and performance report was copied.");
+    } finally {
+      if (startedDiagnostics && semanticDiagnostics.enabled) {
+        semanticDiagnostics.stop();
+      }
+      if (this.evaluationController === controller) {
+        this.evaluationController = null;
+      }
+    }
+  }
+
   private async removeModel(): Promise<void> {
     await this.indexManager?.setEmbeddingClient(null, true);
     await this.modelManager.remove();
@@ -152,4 +259,12 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     }
     return null;
   }
+}
+
+async function copyJson(value: unknown): Promise<void> {
+  const clipboard = globalThis.navigator?.clipboard;
+  if (clipboard === undefined) {
+    throw new Error("Clipboard access is unavailable.");
+  }
+  await clipboard.writeText(JSON.stringify(value, null, 2));
 }

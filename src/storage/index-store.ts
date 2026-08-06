@@ -1,5 +1,7 @@
 import { INDEX_SCHEMA_VERSION } from "../constants.ts";
 import type {
+  IndexFileIntegrity,
+  IndexGenerationIntegrity,
   IndexManifest,
   IndexedChunk,
   IndexedDocument,
@@ -7,6 +9,12 @@ import type {
   ModelDescriptor
 } from "../indexing/types.ts";
 import { isRecord } from "../utils/validation.ts";
+import {
+  prepareGenerationFiles,
+  serializeIndexJson,
+  verifyGenerationFiles,
+  type PreparedGenerationFiles
+} from "./index-integrity.ts";
 import {
   IndexJournal,
   type IndexJournalDelta,
@@ -28,6 +36,8 @@ export interface IndexOpenResult extends JournalReplayResult {}
 
 const DATA_FILES = ["documents.json", "chunks.json", "vectors.f32"] as const;
 const ALL_FILES = ["manifest.json", ...DATA_FILES] as const;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const TRUSTED_VECTOR_SAMPLE_SIZE = 32;
 
 export class PersistentIndexStore {
   private readonly adapter: IndexStorageAdapter;
@@ -50,12 +60,31 @@ export class PersistentIndexStore {
     await this.ensureDirectory();
     await this.recoverInterruptedWrite();
     if (!await this.adapter.exists(this.path("manifest.json"))) {
+      const previous = await this.tryReadSnapshot(".previous");
+      if (previous !== null) {
+        await this.restorePreviousGeneration();
+        return previous;
+      }
+      await this.cleanupSuffix("next");
+      await this.cleanupSuffix("previous");
       return this.emptySnapshot();
     }
 
-    const snapshot = await this.readSnapshot("");
-    validateIndexSnapshot(snapshot);
-    return snapshot;
+    try {
+      return await this.readSnapshot("");
+    } catch (error) {
+      const previous = await this.tryReadSnapshot(".previous");
+      if (previous !== null) {
+        await this.restorePreviousGeneration();
+        return previous;
+      }
+      if (isUnsupportedSchemaError(error)) {
+        await this.delete();
+        await this.ensureDirectory();
+        return this.emptySnapshot();
+      }
+      throw error;
+    }
   }
 
   async openWithJournal(): Promise<IndexOpenResult> {
@@ -74,29 +103,39 @@ export class PersistentIndexStore {
   }
 
   async write(snapshot: IndexSnapshot): Promise<IndexSnapshot> {
-    const clean = normalizeSnapshot(snapshot, false);
-    validateIndexSnapshot(clean);
+    const normalized = normalizeSnapshot(snapshot, false);
+    validateTrustedIndexSnapshot(normalized);
+    const files = await prepareGenerationFiles(
+      normalized.documents,
+      normalized.chunks,
+      normalized.vectors
+    );
+    const clean: IndexSnapshot = {
+      ...normalized,
+      manifest: {
+        ...normalized.manifest,
+        files: files.integrity
+      }
+    };
+    validateTrustedIndexSnapshot(clean);
+
     await this.ensureDirectory();
     await this.backupStableGeneration();
-
-    await this.adapter.write(this.path("manifest.json"), serialize({
+    await this.adapter.write(this.path("manifest.json"), serializeIndexJson({
       ...clean.manifest,
       dirty: true
     }));
 
     try {
-      await this.writeNextGeneration(clean);
-      validateIndexSnapshot(await this.readSnapshot(".next"));
+      await this.writeNextGeneration(clean.manifest, files);
       await this.promoteNextGeneration();
-      await this.cleanupSuffix("previous");
     } catch (error) {
       await this.restorePreviousGeneration();
       throw error;
     }
 
-    // The full generation is authoritative now. A stale journal that could not
-    // be removed is rejected on the next open because its base generation no
-    // longer matches.
+    // Keep one prior generation as a checksum-verified recovery source. It is
+    // replaced at the start of the next checkpoint.
     await this.journal.clear().catch(() => undefined);
     return clean;
   }
@@ -108,22 +147,25 @@ export class PersistentIndexStore {
     }
   }
 
-  private async writeNextGeneration(snapshot: IndexSnapshot): Promise<void> {
+  private async writeNextGeneration(
+    manifest: IndexManifest,
+    files: PreparedGenerationFiles
+  ): Promise<void> {
     await this.adapter.write(
       this.path("documents.json.next"),
-      serialize(snapshot.documents)
+      files.documentsText
     );
     await this.adapter.write(
       this.path("chunks.json.next"),
-      serialize(snapshot.chunks)
+      files.chunksText
     );
     await this.adapter.writeBinary(
       this.path("vectors.f32.next"),
-      toArrayBuffer(snapshot.vectors)
+      files.vectorBuffer
     );
     await this.adapter.write(
       this.path("manifest.json.next"),
-      serialize(snapshot.manifest)
+      serializeIndexJson(manifest)
     );
   }
 
@@ -133,16 +175,41 @@ export class PersistentIndexStore {
     const manifest = parseManifest(await this.adapter.read(
       this.path(`manifest.json${suffix}`)
     ));
-    const documents = parseDocuments(await this.adapter.read(
-      this.path(`documents.json${suffix}`)
-    ));
-    const chunks = parseChunks(await this.adapter.read(
-      this.path(`chunks.json${suffix}`)
-    ));
-    const vectors = readVectors(await this.adapter.readBinary(
-      this.path(`vectors.f32${suffix}`)
-    ));
-    return { manifest, documents, chunks, vectors };
+    if (manifest.schemaVersion !== INDEX_SCHEMA_VERSION) {
+      throw new Error(`Unsupported semantic index schema: ${manifest.schemaVersion}`);
+    }
+    if (manifest.files === null) {
+      throw new Error("Semantic index generation integrity metadata is missing.");
+    }
+    const [documentsText, chunksText, vectorBuffer] = await Promise.all([
+      this.adapter.read(this.path(`documents.json${suffix}`)),
+      this.adapter.read(this.path(`chunks.json${suffix}`)),
+      this.adapter.readBinary(this.path(`vectors.f32${suffix}`))
+    ]);
+    await verifyGenerationFiles(
+      manifest.files,
+      documentsText,
+      chunksText,
+      vectorBuffer
+    );
+    const snapshot: IndexSnapshot = {
+      manifest,
+      documents: parseDocuments(documentsText),
+      chunks: parseChunks(chunksText),
+      vectors: readVectors(vectorBuffer)
+    };
+    validateIndexSnapshot(snapshot);
+    return snapshot;
+  }
+
+  private async tryReadSnapshot(
+    suffix: "" | ".next" | ".previous"
+  ): Promise<IndexSnapshot | null> {
+    try {
+      return await this.readSnapshot(suffix);
+    } catch {
+      return null;
+    }
   }
 
   private async backupStableGeneration(): Promise<void> {
@@ -169,7 +236,6 @@ export class PersistentIndexStore {
     const manifestPath = this.path("manifest.json");
     if (!await this.adapter.exists(manifestPath)) {
       await this.cleanupSuffix("next");
-      await this.cleanupSuffix("previous");
       return;
     }
 
@@ -181,10 +247,19 @@ export class PersistentIndexStore {
     }
     if (!dirty) {
       await this.cleanupSuffix("next");
-      await this.cleanupSuffix("previous");
       return;
     }
-    await this.restorePreviousGeneration();
+
+    const previous = await this.tryReadSnapshot(".previous");
+    if (previous !== null) {
+      await this.restorePreviousGeneration();
+      return;
+    }
+    for (const file of ALL_FILES) {
+      await this.removeIfExists(this.path(file));
+    }
+    await this.cleanupSuffix("next");
+    await this.cleanupSuffix("previous");
   }
 
   private async restorePreviousGeneration(): Promise<void> {
@@ -258,7 +333,8 @@ export function createEmptyIndexManifest(
     dimensions: 0,
     lastCompletedAt: null,
     dirty: false,
-    generation: 0
+    generation: 0,
+    files: null
   };
 }
 
@@ -278,17 +354,26 @@ function normalizeSnapshot(snapshot: IndexSnapshot, dirty: boolean): IndexSnapsh
       vectorCount: snapshot.manifest.dimensions === 0
         ? 0
         : snapshot.vectors.length / snapshot.manifest.dimensions,
-      dirty
+      dirty,
+      files: null
     },
     documents: [...snapshot.documents]
       .sort((left, right) => left.path.localeCompare(right.path)),
     chunks: [...snapshot.chunks]
       .sort((left, right) => left.id.localeCompare(right.id)),
-    vectors: new Float32Array(snapshot.vectors)
+    vectors: snapshot.vectors
   };
 }
 
 export function validateIndexSnapshot(snapshot: IndexSnapshot): void {
+  validateSnapshot(snapshot, true);
+}
+
+function validateTrustedIndexSnapshot(snapshot: IndexSnapshot): void {
+  validateSnapshot(snapshot, false);
+}
+
+function validateSnapshot(snapshot: IndexSnapshot, scanAllVectors: boolean): void {
   const { manifest, documents, chunks, vectors } = snapshot;
   if (manifest.schemaVersion !== INDEX_SCHEMA_VERSION) {
     throw new Error(`Unsupported semantic index schema: ${manifest.schemaVersion}`);
@@ -309,6 +394,9 @@ export function validateIndexSnapshot(snapshot: IndexSnapshot): void {
   if (!Number.isInteger(manifest.vectorCount) || manifest.vectorCount < 0) {
     throw new Error("Semantic index vector count is invalid.");
   }
+  if (manifest.files !== null) {
+    validateGenerationIntegrity(manifest.files);
+  }
   if (manifest.model === null) {
     if (manifest.dimensions !== 0) {
       throw new Error("A vectorless semantic index declares dimensions.");
@@ -327,10 +415,10 @@ export function validateIndexSnapshot(snapshot: IndexSnapshot): void {
   } else if (vectors.length !== manifest.vectorCount * manifest.dimensions) {
     throw new Error("Semantic vector byte length does not match the manifest.");
   }
-  for (const value of vectors) {
-    if (!Number.isFinite(value)) {
-      throw new Error("Semantic vector data contains a non-finite value.");
-    }
+  if (scanAllVectors) {
+    validateAllVectors(vectors);
+  } else {
+    validateVectorSample(vectors);
   }
 
   const documentsById = new Map<string, IndexedDocument>();
@@ -399,6 +487,44 @@ export function validateIndexSnapshot(snapshot: IndexSnapshot): void {
   }
 }
 
+function validateAllVectors(vectors: Float32Array): void {
+  for (const value of vectors) {
+    if (!Number.isFinite(value)) {
+      throw new Error("Semantic vector data contains a non-finite value.");
+    }
+  }
+}
+
+function validateVectorSample(vectors: Float32Array): void {
+  const sampleCount = Math.min(TRUSTED_VECTOR_SAMPLE_SIZE, vectors.length);
+  if (sampleCount === 0) {
+    return;
+  }
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const index = sampleCount === 1
+      ? 0
+      : Math.floor(sample * (vectors.length - 1) / (sampleCount - 1));
+    if (!Number.isFinite(vectors[index])) {
+      throw new Error("Semantic vector data contains a non-finite sampled value.");
+    }
+  }
+}
+
+function validateGenerationIntegrity(integrity: IndexGenerationIntegrity): void {
+  validateFileIntegrity("documents", integrity.documents);
+  validateFileIntegrity("chunks", integrity.chunks);
+  validateFileIntegrity("vectors", integrity.vectors);
+}
+
+function validateFileIntegrity(name: string, integrity: IndexFileIntegrity): void {
+  if (!Number.isInteger(integrity.bytes) || integrity.bytes < 0) {
+    throw new Error(`Semantic index ${name} byte size is invalid.`);
+  }
+  if (!SHA256_PATTERN.test(integrity.sha256)) {
+    throw new Error(`Semantic index ${name} checksum metadata is invalid.`);
+  }
+}
+
 function parseManifest(value: string): IndexManifest {
   const input: unknown = JSON.parse(value);
   if (!isRecord(input)) {
@@ -414,7 +540,32 @@ function parseManifest(value: string): IndexManifest {
     dimensions: readInteger(input, "dimensions"),
     lastCompletedAt: readNullableNumber(input, "lastCompletedAt"),
     dirty: readBoolean(input, "dirty"),
-    generation: readInteger(input, "generation")
+    generation: readInteger(input, "generation"),
+    files: parseGenerationIntegrity(input["files"])
+  };
+}
+
+function parseGenerationIntegrity(input: unknown): IndexGenerationIntegrity | null {
+  if (input === null || input === undefined) {
+    return null;
+  }
+  if (!isRecord(input)) {
+    throw new Error("Semantic index generation integrity metadata is invalid.");
+  }
+  return {
+    documents: parseFileIntegrity(input["documents"], "documents"),
+    chunks: parseFileIntegrity(input["chunks"], "chunks"),
+    vectors: parseFileIntegrity(input["vectors"], "vectors")
+  };
+}
+
+function parseFileIntegrity(input: unknown, name: string): IndexFileIntegrity {
+  if (!isRecord(input)) {
+    throw new Error(`Semantic index ${name} integrity metadata is invalid.`);
+  }
+  return {
+    bytes: readInteger(input, "bytes"),
+    sha256: readString(input, "sha256")
   };
 }
 
@@ -502,21 +653,12 @@ function readVectors(buffer: ArrayBuffer): Float32Array {
   if (buffer.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
     throw new Error("Semantic vector file has an invalid byte length.");
   }
-  return new Float32Array(buffer.slice(0));
+  return new Float32Array(buffer);
 }
 
-function toArrayBuffer(vectors: Float32Array): ArrayBuffer {
-  const bytes = new Uint8Array(vectors.byteLength);
-  bytes.set(new Uint8Array(
-    vectors.buffer,
-    vectors.byteOffset,
-    vectors.byteLength
-  ));
-  return bytes.buffer;
-}
-
-function serialize(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
+function isUnsupportedSchemaError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.startsWith("Unsupported semantic index schema:");
 }
 
 function readString(record: Record<string, unknown>, key: string): string {

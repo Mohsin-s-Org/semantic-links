@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { IndexManifest, IndexSnapshot } from "../../src/indexing/types.ts";
+import type { IndexSnapshot } from "../../src/indexing/types.ts";
 import { prepareGenerationFiles } from "../../src/storage/index-integrity.ts";
 import {
   createEmptyIndexManifest,
@@ -194,10 +194,11 @@ test("fully scans untrusted vectors after checksum verification", async () => {
     written.chunks,
     corrupted
   );
-  const manifest = parseManifest(await adapter.read(`${ROOT}/manifest.json`));
-  manifest.files = files.integrity;
   await adapter.writeBinary(`${ROOT}/vectors.f32`, files.vectorBuffer);
-  await adapter.write(`${ROOT}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+  await adapter.write(`${ROOT}/manifest.json`, `${JSON.stringify({
+    ...written.manifest,
+    files: files.integrity
+  }, null, 2)}\n`);
 
   await assert.rejects(
     createStore(adapter).open(),
@@ -277,10 +278,6 @@ function createSnapshot(generation: number, name: string): IndexSnapshot {
     }],
     vectors: new Float32Array([0.25, 0.75])
   };
-}
-
-function parseManifest(value: string): IndexManifest {
-  return JSON.parse(value) as IndexManifest;
 }
 
 function cloneValue(value: string | ArrayBuffer): string | ArrayBuffer {

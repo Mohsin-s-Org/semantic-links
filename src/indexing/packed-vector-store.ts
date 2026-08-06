@@ -7,6 +7,12 @@ export interface PackedVectorStats {
   freeRows: number;
 }
 
+export interface PackedVectorSnapshot {
+  dimensions: number;
+  vectors: Float32Array;
+  rowIds: Array<string | null>;
+}
+
 const INITIAL_CAPACITY = 16;
 
 /**
@@ -50,6 +56,14 @@ export class PackedVectorStore implements Iterable<[string, Float32Array]> {
     return this.rowsById.has(id);
   }
 
+  rowOf(id: string): number | undefined {
+    return this.rowsById.get(id);
+  }
+
+  idAt(row: number): string | null | undefined {
+    return this.rowIds[row];
+  }
+
   /** Returns an internal row view. Callers must not mutate it. */
   get(id: string): Float32Array | undefined {
     const row = this.rowsById.get(id);
@@ -59,6 +73,15 @@ export class PackedVectorStore implements Iterable<[string, Float32Array]> {
   getCopy(id: string): Float32Array | undefined {
     const view = this.get(id);
     return view === undefined ? undefined : new Float32Array(view);
+  }
+
+  /** Returns a stable copy suitable for worker transfer or persistence. */
+  snapshot(): PackedVectorSnapshot {
+    return {
+      dimensions: this.dimensionsValue,
+      vectors: new Float32Array(this.matrix),
+      rowIds: [...this.rowIds]
+    };
   }
 
   set(id: string, vector: Float32Array): this {

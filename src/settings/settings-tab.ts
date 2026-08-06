@@ -21,6 +21,8 @@ type SettingsHost = Plugin & {
   openModelSetup?(): void;
   requestModelRemoval?(): void;
   setModelEnabled?(enabled: boolean): Promise<void>;
+  tuneModelThreads?(): Promise<void>;
+  useAutomaticModelThreads?(): Promise<void>;
   resetBackgroundBatchTuning?(): Promise<void>;
 };
 
@@ -85,6 +87,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         }
       },
       this.modelSetting(),
+      this.threadTuningSetting(),
       {
         name: "Semantic indexing",
         desc: "Prepare eligible Markdown passages and keep their local vectors current when the semantic model is enabled.",
@@ -189,6 +192,38 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
     };
   }
 
+  private threadTuningSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Local inference threads",
+      aliases: ["WASM threads", "thread benchmark", "automatic threads", "model performance"],
+      render: (setting) => {
+        const { semanticThreadMode, semanticThreadCount } = this.owner.settings;
+        const selected = semanticThreadMode === "tuned"
+          ? `${semanticThreadCount} tuned WASM thread${semanticThreadCount === 1 ? "" : "s"}`
+          : "automatic ONNX Runtime selection";
+        setting.setDesc(
+          `Current: ${selected}. Tuning tests only the cached local model and stores no hardware identifier. The proxy worker protects responsiveness; it does not itself make inference faster.`
+        );
+        setting.addButton((button) => {
+          button.setButtonText("Tune").onClick(() => {
+            const tune = this.owner.tuneModelThreads;
+            if (tune !== undefined) {
+              void tune.call(this.owner).then(() => this.display());
+            }
+          });
+        });
+        setting.addButton((button) => {
+          button.setButtonText("Use automatic").onClick(() => {
+            const useAutomatic = this.owner.useAutomaticModelThreads;
+            if (useAutomatic !== undefined) {
+              void useAutomatic.call(this.owner).then(() => this.display());
+            }
+          });
+        });
+      }
+    };
+  }
+
   private backgroundTuningSetting(): SettingDefinitionItem<SettingKey> {
     return {
       name: "Background embedding tuning",
@@ -200,8 +235,10 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         );
         setting.addButton((button) => {
           button.setButtonText("Reset").onClick(() => {
-            void this.owner.resetBackgroundBatchTuning?.()
-              .then(() => this.display());
+            const reset = this.owner.resetBackgroundBatchTuning;
+            if (reset !== undefined) {
+              void reset.call(this.owner).then(() => this.display());
+            }
           });
         });
       }

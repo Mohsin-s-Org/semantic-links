@@ -1,4 +1,5 @@
 import type { App, TFile } from "obsidian";
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import { isMarkdownFile } from "../lexical/vault-index.ts";
 import { topDotProducts } from "../retrieval/exact-search.ts";
 import { SemanticSearchWorker } from "../retrieval/semantic-search-worker.ts";
@@ -14,6 +15,11 @@ import {
   findRemovedChunkIds,
   needsDocumentRead
 } from "./change-detection.ts";
+import {
+  CoalescedCheckpointState,
+  DEFAULT_CHECKPOINT_POLICY,
+  type CheckpointPolicy
+} from "./checkpoint-state.ts";
 import { EmbeddingBatcher } from "./embedding-batcher.ts";
 import { parseIndexDocument, type ParsedIndexDocument } from "./note-parser.ts";
 import { createIndexScopeFingerprint } from "./scope-fingerprint.ts";
@@ -39,6 +45,10 @@ interface ScoredSemanticCandidate {
   score: number;
 }
 
+export interface PersistentIndexManagerOptions {
+  checkpointPolicy?: Partial<CheckpointPolicy>;
+}
+
 export class PersistentIndexManager {
   private readonly documents = new Map<string, IndexedDocument>();
   private readonly documentsById = new Map<string, IndexedDocument>();
@@ -48,11 +58,13 @@ export class PersistentIndexManager {
   private readonly listeners = new Set<StatusListener>();
   private readonly lifecycle = new AbortController();
   private readonly searchWorker = new SemanticSearchWorker();
+  private readonly checkpointState: CoalescedCheckpointState;
   private searchEntries: SemanticCandidate[] = [];
   private searchDocumentOrdinals = new Map<string, number>();
   private operation: Promise<void> = Promise.resolve();
   private flushTimer: TimerHandle | null = null;
   private scopeTimer: TimerHandle | null = null;
+  private checkpointTimer: TimerHandle | null = null;
   private scopeFingerprint: string;
   private indexingEnabled: boolean;
   private pendingScopeReset = false;
@@ -71,12 +83,18 @@ export class PersistentIndexManager {
     private readonly pluginVersion: string,
     private readonly vaultFingerprint: string,
     private readonly getSettings: () => SemanticLinksSettings,
-    embeddingClient: EmbeddingClient | null = null
+    embeddingClient: EmbeddingClient | null = null,
+    options: PersistentIndexManagerOptions = {}
   ) {
     this.embeddingClient = embeddingClient;
     const settings = getSettings();
     this.scopeFingerprint = createIndexScopeFingerprint(settings);
     this.indexingEnabled = settings.semanticIndexingEnabled;
+    this.checkpointState = new CoalescedCheckpointState({
+      idleMs: options.checkpointPolicy?.idleMs ?? DEFAULT_CHECKPOINT_POLICY.idleMs,
+      changeThreshold: options.checkpointPolicy?.changeThreshold
+        ?? DEFAULT_CHECKPOINT_POLICY.changeThreshold
+    });
   }
 
   get currentStatus(): IndexStatus {
@@ -201,19 +219,32 @@ export class PersistentIndexManager {
       }
       const modelChanged = client !== null
         && !modelsEqual(this.model, client.descriptor);
+      let searchableChanged = false;
+      let durableChanged = false;
+      let changeCount = 0;
       if (clearVectors || modelChanged) {
+        changeCount += Math.max(1, this.vectors.size);
         this.vectors.clear();
         this.model = client?.descriptor ?? null;
+        searchableChanged = true;
+        durableChanged = true;
       }
-      if (!this.opened || !this.indexingEnabled) {
+      if (!this.opened) {
         this.updateReadyStatus();
         return;
       }
-      if (client !== null) {
-        await this.embedMissingChunks(this.lifecycle.signal);
+      if (client !== null && this.indexingEnabled) {
+        const embedded = await this.embedMissingChunks(this.lifecycle.signal);
+        searchableChanged ||= embedded > 0;
+        durableChanged ||= embedded > 0;
+        changeCount += embedded;
       }
-      if (clearVectors || modelChanged || client !== null) {
-        await this.persistCurrentGeneration();
+      if (searchableChanged) {
+        this.refreshSearchIndexMeasured();
+      }
+      if (durableChanged) {
+        this.markDirty(Math.max(1, changeCount));
+        await this.checkpointCurrentGeneration();
       }
       this.updateReadyStatus();
     });
@@ -240,11 +271,16 @@ export class PersistentIndexManager {
   }
 
   async rebuild(): Promise<void> {
-    await this.enqueue(() => this.rebuildInternal());
+    await this.enqueue(async () => {
+      await this.rebuildInternal();
+      await this.checkpointCurrentGeneration();
+      this.updateReadyStatus();
+    });
   }
 
   async deleteIndex(): Promise<void> {
     await this.enqueue(async () => {
+      this.cancelCheckpointTimer();
       this.updateStatus("deleting", "Deleting the local semantic index.");
       this.clearMemory();
       await this.store.delete();
@@ -255,6 +291,7 @@ export class PersistentIndexManager {
 
   async flush(): Promise<void> {
     this.cancelScheduledFlush();
+    this.cancelCheckpointTimer();
     if (this.scopeTimer !== null) {
       this.cancelScopeTimer();
       await this.enqueue(() => this.applyPendingSettingsChange());
@@ -263,6 +300,10 @@ export class PersistentIndexManager {
     if (this.pendingPaths.size > 0) {
       await this.flushPending();
     }
+    await this.enqueue(async () => {
+      await this.checkpointCurrentGeneration();
+      this.updateReadyStatus();
+    });
   }
 
   dispose(): void {
@@ -273,6 +314,7 @@ export class PersistentIndexManager {
     this.lifecycle.abort();
     this.cancelScheduledFlush();
     this.cancelScopeTimer();
+    this.cancelCheckpointTimer();
     this.pendingPaths.clear();
     this.listeners.clear();
     this.embeddingClient?.dispose();
@@ -312,6 +354,12 @@ export class PersistentIndexManager {
         yield { value: { chunk, document }, vector };
       }
     }
+  }
+
+  private refreshSearchIndexMeasured(): void {
+    semanticDiagnostics.measureSync("index.search_refresh_ms", () => {
+      this.refreshSearchIndex();
+    });
   }
 
   private refreshSearchIndex(): void {
@@ -370,6 +418,7 @@ export class PersistentIndexManager {
     if (scopeChanged) {
       if (this.indexingEnabled) {
         await this.rebuildInternal();
+        await this.checkpointCurrentGeneration();
       } else {
         this.clearMemory();
         await this.store.delete();
@@ -378,6 +427,7 @@ export class PersistentIndexManager {
       }
     } else if (enabledChanged && this.indexingEnabled) {
       await this.rebuildInternal();
+      await this.checkpointCurrentGeneration();
     } else {
       this.updateReadyStatus();
     }
@@ -408,6 +458,20 @@ export class PersistentIndexManager {
     this.flushTimer = globalThis.setTimeout(() => {
       this.flushTimer = null;
       void this.flushPending().catch(() => undefined);
+    }, Math.max(0, delayMs));
+  }
+
+  private scheduleCheckpoint(delayMs: number): void {
+    this.cancelCheckpointTimer();
+    if (this.disposed || !this.opened) {
+      return;
+    }
+    this.checkpointTimer = globalThis.setTimeout(() => {
+      this.checkpointTimer = null;
+      void this.enqueue(async () => {
+        await this.checkpointCurrentGeneration();
+        this.updateReadyStatus();
+      }).catch(() => undefined);
     }, Math.max(0, delayMs));
   }
 
@@ -442,6 +506,7 @@ export class PersistentIndexManager {
   ): Promise<void> {
     const signal = this.lifecycle.signal;
     let changed = changedBeforeRead;
+    let searchableChanged = changedBeforeRead;
     let processed = 0;
     this.updateStatus("indexing", message, {
       totalCount: files.length,
@@ -465,7 +530,9 @@ export class PersistentIndexManager {
       }
       processed += 1;
       if (result === null) {
-        changed = this.removeFromMemory(file.path) || changed;
+        const removed = this.removeFromMemory(file.path);
+        changed = removed || changed;
+        searchableChanged = removed || searchableChanged;
       } else if (result !== undefined) {
         if (
           !replaceUnchanged
@@ -476,6 +543,7 @@ export class PersistentIndexManager {
         } else {
           this.replaceDocument(result);
           changed = true;
+          searchableChanged = true;
         }
       }
       this.updateStatus("indexing", message, {
@@ -488,24 +556,28 @@ export class PersistentIndexManager {
       }
     }
 
-    await this.embedMissingChunks(signal);
-    if (changed) {
-      await this.persistCurrentGeneration();
+    const embedded = await this.embedMissingChunks(signal);
+    searchableChanged ||= embedded > 0;
+    if (searchableChanged) {
+      this.refreshSearchIndexMeasured();
+    }
+    if (changed || embedded > 0) {
+      this.markDirty(Math.max(1, processed + embedded));
     }
     this.updateReadyStatus();
   }
 
-  private async embedMissingChunks(signal: AbortSignal): Promise<void> {
+  private async embedMissingChunks(signal: AbortSignal): Promise<number> {
     const client = this.embeddingClient;
     if (client === null || this.shouldStop()) {
-      return;
+      return 0;
     }
     const inputs = [...this.chunks.values()]
       .filter((chunk) => !this.vectors.has(chunk.id))
       .map((chunk) => ({ id: chunk.id, text: chunk.embeddingText }));
     if (inputs.length === 0) {
       this.model = client.descriptor;
-      return;
+      return 0;
     }
     const result = await new EmbeddingBatcher(client).embed(
       inputs,
@@ -518,6 +590,7 @@ export class PersistentIndexManager {
     for (const [id, vector] of result.vectorsById) {
       this.vectors.set(id, vector);
     }
+    return result.vectorsById.size;
   }
 
   private replaceDocument(parsed: ParsedIndexDocument): void {
@@ -550,11 +623,40 @@ export class PersistentIndexManager {
     return true;
   }
 
-  private async persistCurrentGeneration(): Promise<void> {
-    const written = await this.store.write(this.createSnapshot(Date.now()));
-    this.generation = written.manifest.generation;
-    this.lastCompletedAt = written.manifest.lastCompletedAt;
-    this.refreshSearchIndex();
+  private markDirty(changeCount: number): void {
+    const delayMs = this.checkpointState.markDirty(changeCount);
+    semanticDiagnostics.increment("index.pending_changes", changeCount);
+    semanticDiagnostics.setGauge(
+      "index.pending_change_count",
+      this.checkpointState.current.pendingChanges
+    );
+    this.scheduleCheckpoint(delayMs);
+  }
+
+  private async checkpointCurrentGeneration(): Promise<void> {
+    if (!this.checkpointState.begin()) {
+      return;
+    }
+    this.cancelCheckpointTimer();
+    this.updateStatus("checkpointing", "Saving the local semantic checkpoint.", resetProgress());
+    try {
+      const snapshot = semanticDiagnostics.measureSync("index.snapshot_create_ms", () => {
+        return this.createSnapshot(Date.now());
+      });
+      semanticDiagnostics.setGauge("index.snapshot_vector_bytes", snapshot.vectors.byteLength);
+      const written = await semanticDiagnostics.measure("index.checkpoint_write_ms", () => {
+        return this.store.write(snapshot);
+      });
+      this.generation = written.manifest.generation;
+      this.lastCompletedAt = written.manifest.lastCompletedAt;
+      this.checkpointState.succeed();
+      semanticDiagnostics.increment("index.checkpoint_success");
+      semanticDiagnostics.setGauge("index.pending_change_count", 0);
+    } catch (error) {
+      this.checkpointState.fail();
+      semanticDiagnostics.increment("index.checkpoint_failure");
+      throw error;
+    }
   }
 
   private createSnapshot(completedAt: number): IndexSnapshot {
@@ -616,10 +718,12 @@ export class PersistentIndexManager {
         );
       }
     }
-    this.refreshSearchIndex();
+    this.refreshSearchIndexMeasured();
   }
 
   private clearMemory(refreshWorker = true): void {
+    this.cancelCheckpointTimer();
+    this.checkpointState.reset();
     this.documents.clear();
     this.documentsById.clear();
     this.chunks.clear();
@@ -668,7 +772,10 @@ export class PersistentIndexManager {
     const vectorMessage = this.embeddingClient === null
       ? "Passages are ready; install or load the local model to create vectors."
       : `${this.vectors.size} passage vectors are ready.`;
-    this.updateStatus("ready", message ?? vectorMessage, {
+    const durabilityMessage = this.checkpointState.current.dirty
+      ? " Changes are searchable now; a local checkpoint is pending."
+      : " The local checkpoint is current.";
+    this.updateStatus("ready", message ?? `${vectorMessage}${durabilityMessage}`, {
       ...resetProgress(),
       lastCompletedAt: this.lastCompletedAt
     });
@@ -679,6 +786,7 @@ export class PersistentIndexManager {
     message: string,
     patch: Partial<IndexStatus> = {}
   ): void {
+    const checkpoint = this.checkpointState.current;
     this.status = {
       ...this.status,
       phase,
@@ -686,6 +794,9 @@ export class PersistentIndexManager {
       documentCount: this.documents.size,
       chunkCount: this.chunks.size,
       vectorCount: this.vectors.size,
+      dirty: checkpoint.dirty,
+      checkpointing: checkpoint.checkpointing,
+      pendingChanges: checkpoint.pendingChanges,
       ...patch
     };
     for (const listener of this.listeners) {
@@ -726,6 +837,13 @@ export class PersistentIndexManager {
       this.scopeTimer = null;
     }
   }
+
+  private cancelCheckpointTimer(): void {
+    if (this.checkpointTimer !== null) {
+      globalThis.clearTimeout(this.checkpointTimer);
+      this.checkpointTimer = null;
+    }
+  }
 }
 
 function groupMatches(
@@ -761,6 +879,9 @@ function createStatus(phase: IndexStatus["phase"], message: string): IndexStatus
     queuedCount: 0,
     processedCount: 0,
     totalCount: 0,
+    dirty: false,
+    checkpointing: false,
+    pendingChanges: 0,
     message,
     lastCompletedAt: null
   };

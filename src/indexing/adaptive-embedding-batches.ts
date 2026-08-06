@@ -109,7 +109,7 @@ export class AdaptiveEmbeddingBatchController {
 
     if (this.currentSizeValue < this.learnedLimitValue) {
       this.currentSizeValue = Math.min(
-        maximum,
+        this.policy.maximumSize,
         this.learnedLimitValue,
         this.currentSizeValue + this.policy.growthStep * 2
       );

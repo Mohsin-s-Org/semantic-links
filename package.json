@@ -13,6 +13,7 @@
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "node --experimental-strip-types --test tests/unit/*.test.ts",
     "test:integration": "node --experimental-strip-types --test tests/integration/*.test.ts",
+    "benchmark:semantic": "node --experimental-strip-types scripts/semantic-benchmark.ts",
     "verify:reproducible-build": "node scripts/verify-reproducible-build.mjs",
     "stage:release": "node scripts/stage-release.mjs",
     "validate:versions": "node scripts/validate-versions.mjs",

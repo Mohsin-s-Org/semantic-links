@@ -1,6 +1,15 @@
 import { semanticDiagnostics } from "../diagnostics/performance.ts";
-import { LocalEmbeddingClient, type ModelProgressListener } from "./local-embedding-client.ts";
+import {
+  LocalEmbeddingClient,
+  type ModelProgressListener
+} from "./local-embedding-client.ts";
 import { LOCAL_MODEL_CACHE_KEY } from "./model-config.ts";
+import {
+  runThreadBenchmark,
+  type ThreadBenchmarkProgress,
+  type ThreadBenchmarkResult
+} from "./thread-benchmark.ts";
+import type { WasmThreadCount } from "./thread-tuning.ts";
 
 export type ModelState = "not-installed" | "disabled" | "loading" | "ready" | "error";
 
@@ -8,6 +17,12 @@ export interface ModelStatus {
   state: ModelState;
   message: string;
   percent: number | null;
+}
+
+export interface ThreadTuningOutcome {
+  client: LocalEmbeddingClient;
+  benchmark: ThreadBenchmarkResult | null;
+  restoredAutomatic: boolean;
 }
 
 type StatusListener = (status: ModelStatus) => void;
@@ -18,6 +33,8 @@ export class LocalModelManager {
   private clientValue: LocalEmbeddingClient | null = null;
   private loading: Promise<LocalEmbeddingClient> | null = null;
   private loadingController: AbortController | null = null;
+  private configuredThreadsValue: WasmThreadCount = 0;
+  private disposed = false;
   private statusValue: ModelStatus = {
     state: "not-installed",
     message: "The local semantic model is not installed.",
@@ -26,6 +43,10 @@ export class LocalModelManager {
 
   get client(): LocalEmbeddingClient | null {
     return this.clientValue;
+  }
+
+  get configuredThreads(): WasmThreadCount {
+    return this.configuredThreadsValue;
   }
 
   get status(): ModelStatus {
@@ -38,12 +59,80 @@ export class LocalModelManager {
     return () => this.listeners.delete(listener);
   }
 
+  configureThreads(threads: WasmThreadCount): void {
+    this.configuredThreadsValue = threads;
+  }
+
   loadCached(): Promise<LocalEmbeddingClient> {
     return this.load(false);
   }
 
   download(): Promise<LocalEmbeddingClient> {
     return this.load(true);
+  }
+
+  async tuneThreads(
+    signal: AbortSignal,
+    onProgress?: (progress: ThreadBenchmarkProgress) => void
+  ): Promise<ThreadTuningOutcome> {
+    this.throwIfDisposed();
+    this.cancelLoading();
+    this.releaseClient();
+    this.update({
+      state: "loading",
+      message: "Testing conservative local inference thread settings.",
+      percent: 0
+    });
+
+    try {
+      const benchmark = await runThreadBenchmark(
+        (threads, candidateSignal) => LocalEmbeddingClient.create(
+          false,
+          candidateSignal,
+          undefined,
+          { threads }
+        ),
+        globalThis.navigator?.hardwareConcurrency,
+        signal,
+        {
+          onProgress: (progress) => {
+            onProgress?.(progress);
+            const completed = progress.candidateIndex * progress.sampleCount
+              + progress.sample;
+            const total = progress.candidateCount * progress.sampleCount;
+            this.update({
+              state: "loading",
+              message: `Testing ${formatThreads(progress.threads)} (${completed}/${total}).`,
+              percent: total > 0 ? Math.round(completed / total * 100) : null
+            });
+          }
+        }
+      );
+      const threads = benchmark.decision.threads;
+      this.configuredThreadsValue = threads;
+      const client = await this.createCachedClient(threads, signal);
+      this.installClient(client, `Local semantic matching is ready with ${formatThreads(threads)}.`);
+      semanticDiagnostics.setGauge("thread_tuning.selected_threads", threads);
+      semanticDiagnostics.increment(`thread_tuning.selection_${benchmark.decision.reason}`);
+      return {
+        client,
+        benchmark,
+        restoredAutomatic: false
+      };
+    } catch (error) {
+      this.configuredThreadsValue = 0;
+      const client = await this.restoreAutomaticClient();
+      if (signal.aborted) {
+        semanticDiagnostics.increment("thread_tuning.cancelled");
+        return {
+          client,
+          benchmark: null,
+          restoredAutomatic: true
+        };
+      }
+      semanticDiagnostics.increment("thread_tuning.error_fallback");
+      throw error;
+    }
   }
 
   async embedQuery(text: string, signal: AbortSignal): Promise<Float32Array | null> {
@@ -98,10 +187,7 @@ export class LocalModelManager {
 
   unload(): void {
     this.cancelLoading();
-    this.clientValue?.dispose();
-    this.clientValue = null;
-    this.queryCache.clear();
-    this.updateCacheGauges();
+    this.releaseClient();
     semanticDiagnostics.captureMemory("unload");
     this.update({
       state: "disabled",
@@ -112,10 +198,7 @@ export class LocalModelManager {
 
   async remove(): Promise<void> {
     this.cancelLoading();
-    this.clientValue?.dispose();
-    this.clientValue = null;
-    this.queryCache.clear();
-    this.updateCacheGauges();
+    this.releaseClient();
     await semanticDiagnostics.measure("model.cache_delete_ms", deleteModelCache);
     this.update({
       state: "not-installed",
@@ -125,15 +208,17 @@ export class LocalModelManager {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     this.cancelLoading();
-    this.clientValue?.dispose();
-    this.clientValue = null;
-    this.queryCache.clear();
-    this.updateCacheGauges();
+    this.releaseClient();
     this.listeners.clear();
   }
 
   private load(allowDownload: boolean): Promise<LocalEmbeddingClient> {
+    this.throwIfDisposed();
     if (this.clientValue !== null) {
       semanticDiagnostics.increment("model.load_reused");
       return Promise.resolve(this.clientValue);
@@ -170,15 +255,14 @@ export class LocalModelManager {
       const client = await LocalEmbeddingClient.create(
         allowDownload,
         signal,
-        onProgress
+        onProgress,
+        { threads: this.configuredThreadsValue }
       );
       if (signal.aborted) {
         client.dispose();
         throw abortError(signal);
       }
-      this.clientValue = client;
-      semanticDiagnostics.captureMemory("reload");
-      this.update({ state: "ready", message: "Local semantic matching is ready.", percent: 100 });
+      this.installClient(client, "Local semantic matching is ready.");
       return client;
     } catch (error) {
       semanticDiagnostics.increment("model.load_error");
@@ -193,6 +277,41 @@ export class LocalModelManager {
         });
       }
       throw error;
+    }
+  }
+
+  private createCachedClient(
+    threads: WasmThreadCount,
+    signal: AbortSignal
+  ): Promise<LocalEmbeddingClient> {
+    return LocalEmbeddingClient.create(false, signal, undefined, { threads });
+  }
+
+  private async restoreAutomaticClient(): Promise<LocalEmbeddingClient> {
+    this.throwIfDisposed();
+    const recovery = new AbortController();
+    const client = await this.createCachedClient(0, recovery.signal);
+    this.installClient(client, "Thread tuning stopped; automatic local inference is ready.");
+    return client;
+  }
+
+  private installClient(client: LocalEmbeddingClient, message: string): void {
+    this.releaseClient();
+    this.clientValue = client;
+    semanticDiagnostics.captureMemory("reload");
+    this.update({ state: "ready", message, percent: 100 });
+  }
+
+  private releaseClient(): void {
+    this.clientValue?.dispose();
+    this.clientValue = null;
+    this.queryCache.clear();
+    this.updateCacheGauges();
+  }
+
+  private throwIfDisposed(): void {
+    if (this.disposed) {
+      throw new Error("The local model manager has been disposed.");
     }
   }
 
@@ -223,4 +342,8 @@ function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new DOMException("The model setup was cancelled.", "AbortError");
+}
+
+function formatThreads(threads: WasmThreadCount): string {
+  return threads === 0 ? "automatic threads" : `${threads} WASM thread${threads === 1 ? "" : "s"}`;
 }

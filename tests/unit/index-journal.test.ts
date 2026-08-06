@@ -8,6 +8,7 @@ import {
   type JournalStorageAdapter
 } from "../../src/storage/index-journal.ts";
 import { createEmptyIndexManifest } from "../../src/storage/index-store.ts";
+import { isRecord } from "../../src/utils/validation.ts";
 
 class MemoryJournalAdapter implements JournalStorageAdapter {
   readonly files = new Map<string, string>();
@@ -92,9 +93,10 @@ test("stops at a checksum failure and discards later records", async () => {
   await journal.append(deltaFor("Notes/one.md", "one", [0.6, 0.4]), IDENTITY);
   await journal.append(deltaFor("Notes/two.md", "two", [0.3, 0.7]), IDENTITY);
   const lines = (await adapter.read(JOURNAL_PATH)).trimEnd().split("\n");
-  const second = JSON.parse(lines[2] ?? "{}") as { checksum?: string };
-  second.checksum = "corrupted";
-  lines[2] = JSON.stringify(second);
+  const parsed: unknown = JSON.parse(lines[2] ?? "{}");
+  assert.ok(isRecord(parsed));
+  parsed["checksum"] = "corrupted";
+  lines[2] = JSON.stringify(parsed);
   await adapter.write(JOURNAL_PATH, `${lines.join("\n")}\n`);
 
   const replayed = await new IndexJournal(adapter, ROOT).replay(baseSnapshot(), IDENTITY);

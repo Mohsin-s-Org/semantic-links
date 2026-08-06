@@ -256,9 +256,9 @@ function readMemoryUsage(): Record<string, number> {
     copyFinite(result, "js_heap_limit", performanceMemory.jsHeapSizeLimit);
   }
 
-  const processLike = (globalThis as typeof globalThis & {
-    process?: { memoryUsage?: () => Record<string, number> };
-  }).process;
+  const processLike = (globalThis as { process?: {
+    memoryUsage?: () => Record<string, unknown>;
+  } }).process;
   const processMemory = processLike?.memoryUsage?.();
   if (processMemory !== undefined) {
     for (const [name, value] of Object.entries(processMemory)) {
@@ -268,7 +268,7 @@ function readMemoryUsage(): Record<string, number> {
   return result;
 }
 
-function copyFinite(destination: Record<string, number>, name: string, value: number | undefined): void {
+function copyFinite(destination: Record<string, number>, name: string, value: unknown): void {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     destination[name] = value;
   }

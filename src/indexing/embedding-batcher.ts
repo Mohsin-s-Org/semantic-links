@@ -153,7 +153,9 @@ export class EmbeddingBatcher {
             signals: this.readSignals()
           });
         } catch (error) {
-          this.adaptiveController?.recordFailure();
+          if (!signal.aborted) {
+            this.adaptiveController?.recordFailure();
+          }
           throw error;
         }
 

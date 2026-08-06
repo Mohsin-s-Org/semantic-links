@@ -53,7 +53,10 @@ export async function runLocalRelevanceEvaluation(
     );
 
     const documents = new Map(corpus.documents.map((document) => [document.path, document]));
-    const passageEntries = [...passageVectors.vectorsById].map(([path, vector]) => ({ path, vector }));
+    const passageEntries = [...passageVectors.vectorsById].map(([path, vector]) => ({
+      value: path,
+      vector
+    }));
     const lexicalCases: RelevanceCaseResult[] = [];
     const semanticCases: RelevanceCaseResult[] = [];
     const hybridCases: RelevanceCaseResult[] = [];
@@ -73,7 +76,7 @@ export async function runLocalRelevanceEvaluation(
       }
       const semantic = topDotProducts(queryVector, passageEntries, 10)
         .flatMap(({ value, score }) => {
-          const document = documents.get(value.path);
+          const document = documents.get(value);
           return document === undefined ? [] : [toSemanticMatch(document, score)];
         });
       const hybrid = mergeHybridSuggestions(lexical, semantic, 10);

@@ -21,7 +21,7 @@ export async function prepareGenerationFiles(
 ): Promise<PreparedGenerationFiles> {
   const documentsText = serializeIndexJson(documents);
   const chunksText = serializeIndexJson(chunks);
-  const vectorBuffer = exactArrayBuffer(vectors);
+  const vectorBuffer = exactVectorBuffer(vectors);
   const [documentsIntegrity, chunksIntegrity, vectorsIntegrity] = await Promise.all([
     integrityForText(documentsText),
     integrityForText(chunksText),
@@ -59,7 +59,7 @@ export function serializeIndexJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function exactArrayBuffer(vectors: Float32Array): ArrayBuffer {
+function exactVectorBuffer(vectors: Float32Array): ArrayBuffer {
   const buffer = vectors.buffer;
   if (!(buffer instanceof ArrayBuffer)) {
     throw new Error("Shared semantic vector buffers cannot be persisted.");
@@ -70,11 +70,22 @@ function exactArrayBuffer(vectors: Float32Array): ArrayBuffer {
   return buffer.slice(vectors.byteOffset, vectors.byteOffset + vectors.byteLength);
 }
 
+function exactByteBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = bytes.buffer;
+  if (!(buffer instanceof ArrayBuffer)) {
+    throw new Error("Shared encoded index buffers cannot be checksummed.");
+  }
+  if (bytes.byteOffset === 0 && bytes.byteLength === buffer.byteLength) {
+    return buffer;
+  }
+  return buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 async function integrityForText(value: string): Promise<IndexFileIntegrity> {
   const bytes = encoder.encode(value);
   return {
     bytes: bytes.byteLength,
-    sha256: await sha256Hex(bytes)
+    sha256: await sha256Hex(exactByteBuffer(bytes))
   };
 }
 
@@ -85,7 +96,7 @@ async function integrityForBuffer(buffer: ArrayBuffer): Promise<IndexFileIntegri
   };
 }
 
-async function sha256Hex(data: ArrayBuffer | Uint8Array): Promise<string> {
+async function sha256Hex(data: ArrayBuffer): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (subtle === undefined) {
     throw new Error("SHA-256 is unavailable in this Obsidian runtime.");

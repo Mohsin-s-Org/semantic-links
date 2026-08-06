@@ -20,33 +20,47 @@ import {
   LOCAL_MODEL_ID,
   LOCAL_MODEL_REVISION
 } from "./model-config.ts";
+import type { WasmThreadCount } from "./thread-tuning.ts";
 import { createVerifiedFetch, onnxWasmPaths } from "./verified-fetch.ts";
 
 export type ModelProgressListener = (message: string, percent: number | null) => void;
+
+export interface LocalEmbeddingClientOptions {
+  threads?: WasmThreadCount;
+}
 
 const QUERY_PRIORITY = 0;
 const INDEX_PRIORITY = 1;
 
 export class LocalEmbeddingClient implements EmbeddingClient {
   readonly descriptor = LOCAL_MODEL_DESCRIPTOR;
+  readonly threads: WasmThreadCount;
 
   private readonly scheduler = new InferenceScheduler();
   private disposed = false;
 
-  private constructor(private readonly extractor: FeatureExtractionPipeline) {}
+  private constructor(
+    private readonly extractor: FeatureExtractionPipeline,
+    threads: WasmThreadCount
+  ) {
+    this.threads = threads;
+  }
 
   static async create(
     allowDownload: boolean,
     signal: AbortSignal,
-    onProgress?: ModelProgressListener
+    onProgress?: ModelProgressListener,
+    options: LocalEmbeddingClientOptions = {}
   ): Promise<LocalEmbeddingClient> {
+    const threads = options.threads ?? 0;
     throwIfUnavailable(false, signal);
-    configureEnvironment(allowDownload, signal);
+    configureEnvironment(allowDownload, signal, threads);
     onProgress?.(
       allowDownload ? "Preparing the verified local semantic model." : "Loading the cached semantic model.",
       null
     );
     semanticDiagnostics.increment(allowDownload ? "model.download_load_count" : "model.cache_load_count");
+    semanticDiagnostics.setGauge("model.wasm_threads", threads);
     const extractor = await semanticDiagnostics.measure("model.load_ms", () => {
       return pipeline("feature-extraction", LOCAL_MODEL_ID, {
         revision: LOCAL_MODEL_REVISION,
@@ -59,7 +73,7 @@ export class LocalEmbeddingClient implements EmbeddingClient {
       await Promise.resolve(extractor.dispose()).catch(() => undefined);
       throwIfUnavailable(false, signal);
     }
-    const client = new LocalEmbeddingClient(extractor);
+    const client = new LocalEmbeddingClient(extractor, threads);
     await semanticDiagnostics.measure("model.warmup_ms", () => {
       return client.embedQuery("warm up local semantic matching", signal);
     });
@@ -135,7 +149,8 @@ export class LocalEmbeddingClient implements EmbeddingClient {
 
 function configureEnvironment(
   allowDownload: boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  threads: WasmThreadCount
 ): void {
   if (!("caches" in globalThis)) {
     throw new Error("Obsidian's local cache API is unavailable, so the semantic model cannot be stored safely.");
@@ -152,7 +167,7 @@ function configureEnvironment(
   const wasm = env.backends.onnx.wasm ?? {};
   wasm.proxy = true;
   wasm.simd = true;
-  wasm.numThreads = 0;
+  wasm.numThreads = threads;
   wasm.wasmPaths = onnxWasmPaths();
   env.backends.onnx.wasm = wasm;
 }

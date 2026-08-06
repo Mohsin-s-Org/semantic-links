@@ -1,3 +1,4 @@
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import type {
   EmbeddingClient,
   EmbeddingInput,
@@ -26,22 +27,42 @@ export class EmbeddingBatcher {
     signal: AbortSignal,
     onProgress?: (completed: number, total: number) => void
   ): Promise<EmbeddingBatchResult> {
+    const finishTotal = semanticDiagnostics.startSpan("indexing.embedding_total_ms");
     const vectorsById = new Map<string, Float32Array>();
     const dimensions = this.client.descriptor.dimensions;
+    semanticDiagnostics.setGauge("indexing.embedding_input_count", inputs.length);
+    semanticDiagnostics.setGauge("indexing.embedding_batch_limit", this.batchSize);
     if (!Number.isInteger(dimensions) || dimensions < 1) {
+      finishTotal();
       throw new Error("Embedding client dimensions are invalid.");
     }
 
-    for (let start = 0; start < inputs.length; start += this.batchSize) {
-      throwIfAborted(signal);
-      const batch = inputs.slice(start, start + this.batchSize);
-      const outputs = await this.client.embed(batch, signal);
-      validateBatch(batch, outputs, dimensions, vectorsById);
-      onProgress?.(Math.min(inputs.length, start + batch.length), inputs.length);
-      await yieldToEventLoop();
-    }
+    try {
+      for (let start = 0; start < inputs.length; start += this.batchSize) {
+        throwIfAborted(signal);
+        const batch = inputs.slice(start, start + this.batchSize);
+        const characters = batch.reduce((total, input) => total + input.text.length, 0);
+        semanticDiagnostics.setGauge("indexing.embedding_batch_size", batch.length);
+        semanticDiagnostics.setGauge("indexing.embedding_batch_characters", characters);
+        const outputs = await semanticDiagnostics.measure("indexing.embedding_batch_ms", () => {
+          return this.client.embed(batch, signal);
+        });
+        semanticDiagnostics.measureSync("indexing.embedding_validation_ms", () => {
+          validateBatch(batch, outputs, dimensions, vectorsById);
+        });
+        onProgress?.(Math.min(inputs.length, start + batch.length), inputs.length);
+        await semanticDiagnostics.measure("indexing.event_loop_yield_ms", yieldToEventLoop);
+      }
 
-    return { vectorsById, dimensions };
+      return { vectorsById, dimensions };
+    } finally {
+      semanticDiagnostics.setGauge("indexing.embedding_vector_count", vectorsById.size);
+      semanticDiagnostics.setGauge(
+        "indexing.embedding_vector_bytes",
+        vectorsById.size * dimensions * Float32Array.BYTES_PER_ELEMENT
+      );
+      finishTotal();
+    }
   }
 }
 

@@ -5,6 +5,7 @@ import {
   type SettingDefinitionItem
 } from "obsidian";
 import {
+  DEFAULT_BACKGROUND_BATCH_SIZE,
   MAX_DEBOUNCE_MS,
   MAX_SUGGESTIONS,
   MIN_DEBOUNCE_MS,
@@ -20,6 +21,7 @@ type SettingsHost = Plugin & {
   openModelSetup?(): void;
   requestModelRemoval?(): void;
   setModelEnabled?(enabled: boolean): Promise<void>;
+  resetBackgroundBatchTuning?(): Promise<void>;
 };
 
 type SettingKey = keyof SemanticLinksSettings & string;
@@ -93,6 +95,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
           defaultValue: DEFAULT_SETTINGS.semanticIndexingEnabled
         }
       },
+      this.backgroundTuningSetting(),
       {
         name: "Minimum confidence",
         desc: "Hide lexical candidates below this normalized score. Semantic similarity is rank-normalized before hybrid scoring.",
@@ -182,6 +185,25 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
             });
           });
         }
+      }
+    };
+  }
+
+  private backgroundTuningSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Background embedding tuning",
+      aliases: ["batch tuning", "indexing performance", "reset embedding batches"],
+      render: (setting) => {
+        const limit = this.owner.settings.backgroundEmbeddingBatchLimit;
+        setting.setDesc(
+          `Idle indexing may use batches up to ${limit}. Typing, queued queries and memory pressure always return to ${DEFAULT_BACKGROUND_BATCH_SIZE}.`
+        );
+        setting.addButton((button) => {
+          button.setButtonText("Reset").onClick(() => {
+            void this.owner.resetBackgroundBatchTuning?.()
+              .then(() => this.display());
+          });
+        });
       }
     };
   }

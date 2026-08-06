@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AdaptiveEmbeddingBatchController } from "../../src/indexing/adaptive-embedding-batches.ts";
 import { EmbeddingBatcher } from "../../src/indexing/embedding-batcher.ts";
 import type {
   EmbeddingClient,
   EmbeddingInput,
-  EmbeddingOutput
+  EmbeddingOutput,
+  InferenceQueueState
 } from "../../src/indexing/types.ts";
 
 class RecordingClient implements EmbeddingClient {
@@ -35,6 +37,12 @@ class RecordingClient implements EmbeddingClient {
   }
 
   dispose(): void {}
+}
+
+class QueryAwareClient extends RecordingClient {
+  getInferenceQueueState(): InferenceQueueState {
+    return { queryPending: this.batches.length === 0 };
+  }
 }
 
 test("embeds equal-length inputs in bounded stable batches", async () => {
@@ -76,6 +84,38 @@ test("executes similar lengths together but returns original id order", async ()
   assert.deepEqual(client.batches, [["a", "b"], ["m"], ["l"]]);
   assert.deepEqual([...result.vectorsById.keys()], ["l", "a", "m", "b"]);
   assert.deepEqual([...result.vectorsById.get("l") ?? []], [90, 108, 1]);
+});
+
+test("uses a conservative slice while a query is pending then grows when idle", async () => {
+  const client = new QueryAwareClient();
+  const controller = new AdaptiveEmbeddingBatchController({
+    learnedLimit: 4,
+    now: () => 200,
+    policy: {
+      minimumSize: 2,
+      maximumSize: 4,
+      idleMs: 0,
+      sliceBudgetMs: 10_000,
+      fastSlicesToGrow: 2,
+      growthStep: 1
+    }
+  });
+
+  await new EmbeddingBatcher(client, {
+    maxBatchSize: 4,
+    adaptiveController: controller,
+    memoryPressure: () => false,
+    estimateTokens: () => 4
+  }).embed([
+    { id: "a", text: "same" },
+    { id: "b", text: "same" },
+    { id: "c", text: "same" },
+    { id: "d", text: "same" },
+    { id: "e", text: "same" },
+    { id: "f", text: "same" }
+  ], new AbortController().signal);
+
+  assert.deepEqual(client.batches, [["a", "b"], ["c", "d", "e", "f"]]);
 });
 
 test("falls back to current order when token estimates fail", async () => {

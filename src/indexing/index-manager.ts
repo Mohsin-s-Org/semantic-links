@@ -27,6 +27,7 @@ import {
 } from "./checkpoint-state.ts";
 import { EmbeddingBatcher } from "./embedding-batcher.ts";
 import { parseIndexDocument, type ParsedIndexDocument } from "./note-parser.ts";
+import { PackedVectorStore } from "./packed-vector-store.ts";
 import { createIndexScopeFingerprint } from "./scope-fingerprint.ts";
 import type {
   EmbeddingClient,
@@ -63,7 +64,7 @@ export class PersistentIndexManager {
   private readonly documents = new Map<string, IndexedDocument>();
   private readonly documentsById = new Map<string, IndexedDocument>();
   private readonly chunks = new Map<string, IndexedChunk>();
-  private readonly vectors = new Map<string, Float32Array>();
+  private readonly vectors = new PackedVectorStore();
   private readonly pendingPaths = new Set<string>();
   private readonly listeners = new Set<StatusListener>();
   private readonly lifecycle = new AbortController();
@@ -711,15 +712,15 @@ export class PersistentIndexManager {
         removals.push(path);
         continue;
       }
-      const chunks = document.chunkIds.flatMap((chunkId) => {
+      const chunks = document.chunkIds.map((chunkId) => {
         const chunk = this.chunks.get(chunkId);
         if (chunk === undefined) {
-          return [];
+          throw new Error(`Semantic document references a missing chunk: ${document.path}`);
         }
-        return [{
+        return {
           chunk,
           vector: this.vectors.get(chunkId) ?? null
-        }];
+        };
       });
       upserts.push({ document, chunks });
     }
@@ -900,6 +901,11 @@ export class PersistentIndexManager {
     patch: Partial<IndexStatus> = {}
   ): void {
     const checkpoint = this.checkpointState.current;
+    const vectorStats = this.vectors.stats;
+    semanticDiagnostics.setGauge("index.vector_capacity", vectorStats.capacity);
+    semanticDiagnostics.setGauge("index.vector_allocated_bytes", vectorStats.allocatedBytes);
+    semanticDiagnostics.setGauge("index.vector_live_bytes", vectorStats.liveBytes);
+    semanticDiagnostics.setGauge("index.vector_free_rows", vectorStats.freeRows);
     this.status = {
       ...this.status,
       phase,

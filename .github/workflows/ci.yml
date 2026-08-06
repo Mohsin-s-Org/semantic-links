@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - agent/validate-consolidated-semantic-efficiency
+      - agent/ci-validation-base
   workflow_dispatch:
 
 permissions:

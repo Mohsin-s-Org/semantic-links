@@ -31,6 +31,7 @@ const requiredFiles = [
   "src/indexing/note-parser.ts",
   "src/indexing/scope-fingerprint.ts",
   "src/indexing/types.ts",
+  "src/settings/settings-tab.ts",
   "src/storage/index-store.ts",
   "src/views/index-status-view.ts",
   "src/types/obsidian-history-handler-fix.d.ts"
@@ -56,6 +57,7 @@ const [
   mainSource,
   managerSource,
   parserSource,
+  settingsSource,
   storeSource,
   buildSource,
   ciWorkflow,
@@ -68,6 +70,7 @@ const [
   readFile("src/main.ts", "utf8"),
   readFile("src/indexing/index-manager.ts", "utf8"),
   readFile("src/indexing/note-parser.ts", "utf8"),
+  readFile("src/settings/settings-tab.ts", "utf8"),
   readFile("src/storage/index-store.ts", "utf8"),
   readFile("esbuild.config.mjs", "utf8"),
   readFile(".github/workflows/ci.yml", "utf8"),
@@ -91,6 +94,8 @@ assert(mainSource.includes("createSuggestionPopupExtension"), "The inline confir
 assert(managerSource.includes("findRemovedChunkIds"), "Modified notes must retain unchanged passage vectors.");
 assert(managerSource.includes("createIndexScopeFingerprint"), "Stored indexes must be bound to their exclusion scope.");
 assert(parserSource.indexOf("isFileExcluded") < parserSource.indexOf("cachedRead"), "Excluded notes must be rejected before content is read.");
+assert(settingsSource.includes("getSettingDefinitions"), "Obsidian 1.13 settings must remain declarative.");
+assert(!settingsSource.includes(".display("), "Declarative settings must not call deprecated display().");
 assert(storeSource.includes("scopeFingerprint"), "The persistent manifest must record its exclusion scope.");
 assert(storeSource.includes("manifest.json.next"), "Persistent writes must stage a next manifest.");
 assert(storeSource.includes("manifest.json.previous"), "Persistent writes must retain a recoverable previous manifest.");

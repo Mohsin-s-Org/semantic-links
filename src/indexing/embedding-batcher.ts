@@ -1,4 +1,14 @@
+import {
+  DEFAULT_BACKGROUND_BATCH_SIZE,
+  MAX_BACKGROUND_BATCH_SIZE
+} from "../constants.ts";
 import { semanticDiagnostics } from "../diagnostics/performance.ts";
+import {
+  AdaptiveEmbeddingBatchController,
+  backgroundEmbeddingBatches,
+  detectEmbeddingMemoryPressure,
+  type AdaptiveBatchSignals
+} from "./adaptive-embedding-batches.ts";
 import {
   EmbeddingBatchQueue,
   estimateMultilingualTokenLength,
@@ -20,9 +30,10 @@ export interface EmbeddingBatcherOptions {
   maxBatchSize?: number;
   bucketWidth?: number;
   estimateTokens?: EmbeddingTokenEstimator;
+  adaptiveController?: AdaptiveEmbeddingBatchController | null;
+  memoryPressure?: () => boolean;
 }
 
-const DEFAULT_BATCH_SIZE = 4;
 const DEFAULT_BUCKET_WIDTH = 32;
 
 export class EmbeddingBatcher {
@@ -30,15 +41,17 @@ export class EmbeddingBatcher {
   private readonly maxBatchSize: number;
   private readonly bucketWidth: number;
   private readonly estimateTokens: EmbeddingTokenEstimator;
+  private readonly adaptiveController: AdaptiveEmbeddingBatchController | null;
+  private readonly memoryPressure: () => boolean;
 
   constructor(
     client: EmbeddingClient,
-    options: number | EmbeddingBatcherOptions = DEFAULT_BATCH_SIZE
+    options: number | EmbeddingBatcherOptions = {}
   ) {
     const resolved = typeof options === "number"
       ? { maxBatchSize: options }
       : options;
-    const maxBatchSize = resolved.maxBatchSize ?? DEFAULT_BATCH_SIZE;
+    const maxBatchSize = resolved.maxBatchSize ?? MAX_BACKGROUND_BATCH_SIZE;
     const bucketWidth = resolved.bucketWidth ?? DEFAULT_BUCKET_WIDTH;
     if (!Number.isInteger(maxBatchSize) || maxBatchSize < 1) {
       throw new Error("Embedding batch size must be a positive integer.");
@@ -50,6 +63,10 @@ export class EmbeddingBatcher {
     this.maxBatchSize = maxBatchSize;
     this.bucketWidth = bucketWidth;
     this.estimateTokens = resolved.estimateTokens ?? estimateMultilingualTokenLength;
+    this.adaptiveController = resolved.adaptiveController === undefined
+      ? backgroundEmbeddingBatches
+      : resolved.adaptiveController;
+    this.memoryPressure = resolved.memoryPressure ?? detectEmbeddingMemoryPressure;
   }
 
   async embed(
@@ -67,7 +84,7 @@ export class EmbeddingBatcher {
     });
     const fixedPadding = safeFixedOrderPadding(
       inputs,
-      this.maxBatchSize,
+      Math.min(DEFAULT_BACKGROUND_BATCH_SIZE, this.maxBatchSize),
       this.estimateTokens
     );
     let completed = 0;
@@ -91,15 +108,21 @@ export class EmbeddingBatcher {
     }
 
     try {
-      for (
-        let planned = queue.take(this.maxBatchSize);
-        planned !== null;
-        planned = queue.take(this.maxBatchSize)
-      ) {
+      while (queue.remaining > 0) {
         throwIfAborted(signal);
+        const before = this.readSignals();
+        const requestedSize = this.adaptiveController?.nextBatchSize(
+          before,
+          this.maxBatchSize
+        ) ?? this.maxBatchSize;
+        const planned = queue.take(requestedSize);
+        if (planned === null) {
+          break;
+        }
         const batch = planned.items.map(({ input }) => input);
         const characters = batch.reduce((total, input) => total + input.text.length, 0);
         plannedPadding += planned.paddedTokens;
+        semanticDiagnostics.setGauge("indexing.embedding_batch_requested", requestedSize);
         semanticDiagnostics.setGauge("indexing.embedding_batch_size", batch.length);
         semanticDiagnostics.setGauge("indexing.embedding_batch_characters", characters);
         semanticDiagnostics.setGauge(
@@ -114,12 +137,26 @@ export class EmbeddingBatcher {
           "indexing.embedding_batch_padded_tokens",
           planned.paddedTokens
         );
-        const outputs = await semanticDiagnostics.measure("indexing.embedding_batch_ms", () => {
-          return this.client.embed(batch, signal);
-        });
-        semanticDiagnostics.measureSync("indexing.embedding_validation_ms", () => {
-          validateBatch(batch, outputs, dimensions, unorderedVectors);
-        });
+
+        const startedAt = monotonicNow();
+        try {
+          const outputs = await semanticDiagnostics.measure("indexing.embedding_batch_ms", () => {
+            return this.client.embed(batch, signal);
+          });
+          semanticDiagnostics.measureSync("indexing.embedding_validation_ms", () => {
+            validateBatch(batch, outputs, dimensions, unorderedVectors);
+          });
+          this.adaptiveController?.recordSuccess({
+            requestedSize,
+            actualSize: batch.length,
+            durationMs: Math.max(0, monotonicNow() - startedAt),
+            signals: this.readSignals()
+          });
+        } catch (error) {
+          this.adaptiveController?.recordFailure();
+          throw error;
+        }
+
         completed += batch.length;
         onProgress?.(completed, inputs.length);
         await semanticDiagnostics.measure("indexing.event_loop_yield_ms", yieldToEventLoop);
@@ -146,6 +183,13 @@ export class EmbeddingBatcher {
       );
       finishTotal();
     }
+  }
+
+  private readSignals(): AdaptiveBatchSignals {
+    return {
+      queryPending: this.client.getInferenceQueueState?.().queryPending ?? false,
+      memoryPressure: this.memoryPressure()
+    };
   }
 }
 
@@ -227,4 +271,10 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, 0);
   });
+}
+
+function monotonicNow(): number {
+  return typeof globalThis.performance?.now === "function"
+    ? globalThis.performance.now()
+    : Date.now();
 }

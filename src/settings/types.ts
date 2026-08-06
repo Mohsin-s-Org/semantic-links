@@ -9,6 +9,7 @@ export interface SemanticLinksSettings {
   semanticIndexingEnabled: boolean;
   semanticModelEnabled: boolean;
   semanticModelInstalled: boolean;
+  backgroundEmbeddingBatchLimit: number;
   debounceMs: number;
   maxSuggestions: number;
   minimumConfidence: number;

@@ -192,12 +192,12 @@ export default class SemanticLinksPlugin extends Plugin implements IndexStatusVi
     }).open();
   }
 
-  protected async searchSemanticMatches(
+  protected searchSemanticMatches(
     _context: SuggestionContext,
     _sourcePath: string,
     _signal: AbortSignal
   ): Promise<SemanticMatch[]> {
-    return [];
+    return Promise.resolve([]);
   }
 
   private async initializeIndexes(): Promise<void> {

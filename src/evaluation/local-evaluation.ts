@@ -1,3 +1,4 @@
+import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import type { LocalEmbeddingClient } from "../embeddings/local-embedding-client.ts";
 import { EmbeddingBatcher } from "../indexing/embedding-batcher.ts";
 import { LexicalIndex } from "../lexical/index.ts";
@@ -5,7 +6,6 @@ import type { LexicalDocumentInput, LexicalSuggestion } from "../lexical/types.t
 import { topDotProducts } from "../retrieval/exact-search.ts";
 import { mergeHybridSuggestions } from "../retrieval/hybrid.ts";
 import type { SemanticMatch } from "../retrieval/semantic-types.ts";
-import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import { createEvaluationCorpus, type EvaluationFixture } from "./fixtures.ts";
 import {
   evaluateRelevance,
@@ -53,6 +53,7 @@ export async function runLocalRelevanceEvaluation(
     );
 
     const documents = new Map(corpus.documents.map((document) => [document.path, document]));
+    const passageEntries = [...passageVectors.vectorsById].map(([path, vector]) => ({ path, vector }));
     const lexicalCases: RelevanceCaseResult[] = [];
     const semanticCases: RelevanceCaseResult[] = [];
     const hybridCases: RelevanceCaseResult[] = [];
@@ -70,14 +71,11 @@ export async function runLocalRelevanceEvaluation(
       if (queryVector === undefined) {
         throw new Error(`Evaluation query vector was omitted: ${fixture.id}`);
       }
-      const semantic = topDotProducts(
-        queryVector,
-        passageVectors.vectorsById.entries().map(([path, vector]) => ({ path, vector })),
-        10
-      ).flatMap(({ value, score }) => {
-        const document = documents.get(value.path);
-        return document === undefined ? [] : [toSemanticMatch(document, score)];
-      });
+      const semantic = topDotProducts(queryVector, passageEntries, 10)
+        .flatMap(({ value, score }) => {
+          const document = documents.get(value.path);
+          return document === undefined ? [] : [toSemanticMatch(document, score)];
+        });
       const hybrid = mergeHybridSuggestions(lexical, semantic, 10);
       lexicalCases.push(toCase(fixture, lexical));
       semanticCases.push(toCase(fixture, semantic));

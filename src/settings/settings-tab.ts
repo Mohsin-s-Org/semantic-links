@@ -197,21 +197,24 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       name: "Local inference threads",
       aliases: ["WASM threads", "thread benchmark", "automatic threads", "model performance"],
       render: (setting) => {
-        const { semanticThreadMode, semanticThreadCount } = this.owner.settings;
-        const selected = semanticThreadMode === "tuned"
-          ? `${semanticThreadCount} tuned WASM thread${semanticThreadCount === 1 ? "" : "s"}`
-          : "automatic ONNX Runtime selection";
-        setting.setDesc(
-          `Current: ${selected}. Tuning tests only the cached local model and stores no hardware identifier. The proxy worker protects responsiveness; it does not itself make inference faster.`
-        );
+        const refresh = (): void => {
+          const { semanticThreadMode, semanticThreadCount } = this.owner.settings;
+          const selected = semanticThreadMode === "tuned"
+            ? `${semanticThreadCount} tuned WASM thread${semanticThreadCount === 1 ? "" : "s"}`
+            : "automatic ONNX Runtime selection";
+          setting.setDesc(
+            `Current: ${selected}. Tuning tests only the cached local model and stores no hardware identifier. The proxy worker protects responsiveness; it does not itself make inference faster.`
+          );
+        };
+        refresh();
         setting.addButton((button) => {
           button.setButtonText("Tune").onClick(() => {
-            this.runAndRefresh(this.owner.tuneModelThreads);
+            this.runAndRefresh(this.owner.tuneModelThreads, refresh);
           });
         });
         setting.addButton((button) => {
           button.setButtonText("Use automatic").onClick(() => {
-            this.runAndRefresh(this.owner.useAutomaticModelThreads);
+            this.runAndRefresh(this.owner.useAutomaticModelThreads, refresh);
           });
         });
       }
@@ -223,27 +226,29 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
       name: "Background embedding tuning",
       aliases: ["batch tuning", "indexing performance", "reset embedding batches"],
       render: (setting) => {
-        const limit = this.owner.settings.backgroundEmbeddingBatchLimit;
-        setting.setDesc(
-          `Idle indexing may use batches up to ${limit}. Typing, queued queries and memory pressure always return to ${DEFAULT_BACKGROUND_BATCH_SIZE}.`
-        );
+        const refresh = (): void => {
+          setting.setDesc(
+            `Idle indexing may use batches up to ${this.owner.settings.backgroundEmbeddingBatchLimit}. Typing, queued queries and memory pressure always return to ${DEFAULT_BACKGROUND_BATCH_SIZE}.`
+          );
+        };
+        refresh();
         setting.addButton((button) => {
           button.setButtonText("Reset").onClick(() => {
-            this.runAndRefresh(this.owner.resetBackgroundBatchTuning);
+            this.runAndRefresh(this.owner.resetBackgroundBatchTuning, refresh);
           });
         });
       }
     };
   }
 
-  private runAndRefresh(action: (() => Promise<void>) | undefined): void {
+  private runAndRefresh(
+    action: (() => Promise<void>) | undefined,
+    refresh: () => void
+  ): void {
     if (action === undefined) {
       return;
     }
-    void action.call(this.owner).then(
-      () => this.display(),
-      () => this.display()
-    );
+    void action.call(this.owner).then(refresh, refresh);
   }
 
   private heading(name: string): SettingDefinitionItem<SettingKey> {

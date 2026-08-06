@@ -1,6 +1,8 @@
 import {
+  DEFAULT_BACKGROUND_BATCH_SIZE,
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_MAX_SUGGESTIONS,
+  MAX_BACKGROUND_BATCH_SIZE,
   MAX_DEBOUNCE_MS,
   MAX_SUGGESTIONS,
   MIN_DEBOUNCE_MS,
@@ -28,6 +30,7 @@ const SETTING_KEYS = new Set<keyof SemanticLinksSettings>([
   "semanticIndexingEnabled",
   "semanticModelEnabled",
   "semanticModelInstalled",
+  "backgroundEmbeddingBatchLimit",
   "debounceMs",
   "maxSuggestions",
   "minimumConfidence",
@@ -74,6 +77,13 @@ export function loadAndMigrateSettings(input: unknown): SettingsLoadResult {
       modelInstalled
     ),
     semanticModelInstalled: modelInstalled,
+    backgroundEmbeddingBatchLimit: Math.round(readClampedNumber(
+      input,
+      "backgroundEmbeddingBatchLimit",
+      DEFAULT_BACKGROUND_BATCH_SIZE,
+      DEFAULT_BACKGROUND_BATCH_SIZE,
+      MAX_BACKGROUND_BATCH_SIZE
+    )),
     debounceMs: Math.round(readClampedNumber(
       input,
       "debounceMs",
@@ -171,6 +181,7 @@ function matchesCurrentSettings(
     && record["semanticIndexingEnabled"] === settings.semanticIndexingEnabled
     && record["semanticModelEnabled"] === settings.semanticModelEnabled
     && record["semanticModelInstalled"] === settings.semanticModelInstalled
+    && record["backgroundEmbeddingBatchLimit"] === settings.backgroundEmbeddingBatchLimit
     && record["debounceMs"] === settings.debounceMs
     && record["maxSuggestions"] === settings.maxSuggestions
     && record["minimumConfidence"] === settings.minimumConfidence

@@ -6,6 +6,11 @@ import { SemanticSearchWorker } from "../retrieval/semantic-search-worker.ts";
 import type { SemanticMatch } from "../retrieval/semantic-types.ts";
 import { isFileExcluded } from "../scope/exclusions.ts";
 import type { SemanticLinksSettings } from "../settings/types.ts";
+import type {
+  IndexJournalDelta,
+  IndexJournalIdentity,
+  JournalDocumentState
+} from "../storage/index-journal.ts";
 import {
   createEmptyIndexManifest,
   type PersistentIndexStore
@@ -43,6 +48,11 @@ interface SemanticCandidate {
 interface ScoredSemanticCandidate {
   value: SemanticCandidate;
   score: number;
+}
+
+interface EmbeddedChanges {
+  count: number;
+  documentPaths: string[];
 }
 
 export interface PersistentIndexManagerOptions {
@@ -113,15 +123,25 @@ export class PersistentIndexManager {
         return;
       }
       this.updateStatus("opening", "Opening the local semantic index.");
-      let snapshot = await this.store.open();
+      let opened = await this.store.openWithJournal();
+      let snapshot = opened.snapshot;
       let message: string | undefined;
       if (!this.isCompatible(snapshot)) {
         await this.store.delete();
-        snapshot = await this.store.open();
+        opened = await this.store.openWithJournal();
+        snapshot = opened.snapshot;
         message = "The stored index was incompatible with the current vault, scope or model and was reset safely.";
       }
       this.loadSnapshot(snapshot);
       this.opened = true;
+      if (opened.recordCount > 0) {
+        this.markDirty(opened.recordCount);
+        message = `Recovered ${opened.recordCount} journalled semantic index update${opened.recordCount === 1 ? "" : "s"}.`;
+        semanticDiagnostics.setGauge("index.journal_replayed_records", opened.recordCount);
+        if (opened.repaired) {
+          semanticDiagnostics.increment("index.journal_tail_repaired");
+        }
+      }
       this.updateReadyStatus(message);
     });
   }
@@ -134,20 +154,33 @@ export class PersistentIndexManager {
       }
       const files = this.sortedMarkdownFiles();
       const livePaths = new Set(files.map((file) => file.path));
+      const affectedPaths = new Set<string>();
       let changed = false;
       for (const path of [...this.documents.keys()]) {
         if (!livePaths.has(path)) {
+          affectedPaths.add(path);
           changed = this.removeFromMemory(path) || changed;
         }
       }
       const pending = files.filter((file) => {
         if (isFileExcluded(this.app.metadataCache, file, this.getSettings())) {
+          affectedPaths.add(file.path);
           changed = this.removeFromMemory(file.path) || changed;
           return false;
         }
-        return needsDocumentRead(this.documents.get(file.path), file.stat.mtime);
+        const required = needsDocumentRead(this.documents.get(file.path), file.stat.mtime);
+        if (required) {
+          affectedPaths.add(file.path);
+        }
+        return required;
       });
-      await this.processFiles(pending, changed, "Reconciling changed notes");
+      await this.processFiles(
+        pending,
+        changed,
+        "Reconciling changed notes",
+        false,
+        [...affectedPaths]
+      );
     });
   }
 
@@ -177,7 +210,7 @@ export class PersistentIndexManager {
       document.modifiedAt = -1;
       this.documents.set(file.path, document);
     }
-    this.pendingPaths.delete(oldPath);
+    this.pendingPaths.add(oldPath);
     this.pendingPaths.add(file.path);
     this.scheduleFlush(delayMs);
   }
@@ -235,9 +268,9 @@ export class PersistentIndexManager {
       }
       if (client !== null && this.indexingEnabled) {
         const embedded = await this.embedMissingChunks(this.lifecycle.signal);
-        searchableChanged ||= embedded > 0;
-        durableChanged ||= embedded > 0;
-        changeCount += embedded;
+        searchableChanged ||= embedded.count > 0;
+        durableChanged ||= embedded.count > 0;
+        changeCount += embedded.count;
       }
       if (searchableChanged) {
         this.refreshSearchIndexMeasured();
@@ -284,7 +317,7 @@ export class PersistentIndexManager {
       this.updateStatus("deleting", "Deleting the local semantic index.");
       this.clearMemory();
       await this.store.delete();
-      this.loadSnapshot(await this.store.open());
+      this.loadSnapshot((await this.store.openWithJournal()).snapshot);
       this.updateReadyStatus("The local semantic index was deleted.");
     });
   }
@@ -422,7 +455,7 @@ export class PersistentIndexManager {
       } else {
         this.clearMemory();
         await this.store.delete();
-        this.loadSnapshot(await this.store.open());
+        this.loadSnapshot((await this.store.openWithJournal()).snapshot);
         this.updateReadyStatus("The stored index was cleared because its exclusion scope changed while indexing was disabled.");
       }
     } else if (enabledChanged && this.indexingEnabled) {
@@ -445,7 +478,14 @@ export class PersistentIndexManager {
         this.removeFromMemory(path);
       }
     }
-    await this.processFiles(files, true, "Rebuilding the semantic index", true);
+    await this.processFiles(
+      files,
+      true,
+      "Rebuilding the semantic index",
+      true,
+      files.map((file) => file.path),
+      false
+    );
   }
 
   private sortedMarkdownFiles(): TFile[] {
@@ -494,7 +534,13 @@ export class PersistentIndexManager {
         }
       }
       files.sort((left, right) => left.path.localeCompare(right.path));
-      await this.processFiles(files, changed, "Updating changed notes");
+      await this.processFiles(
+        files,
+        changed,
+        "Updating changed notes",
+        false,
+        paths
+      );
     });
   }
 
@@ -502,9 +548,12 @@ export class PersistentIndexManager {
     files: readonly TFile[],
     changedBeforeRead: boolean,
     message: string,
-    replaceUnchanged = false
+    replaceUnchanged = false,
+    affectedPaths: readonly string[] = files.map((file) => file.path),
+    journalChanges = true
   ): Promise<void> {
     const signal = this.lifecycle.signal;
+    const journalPaths = new Set(affectedPaths);
     let changed = changedBeforeRead;
     let searchableChanged = changedBeforeRead;
     let processed = 0;
@@ -518,6 +567,7 @@ export class PersistentIndexManager {
       if (this.shouldStop()) {
         return;
       }
+      journalPaths.add(file.path);
       const previous = this.documents.get(file.path);
       const result = await parseIndexDocument(
         this.app,
@@ -557,40 +607,69 @@ export class PersistentIndexManager {
     }
 
     const embedded = await this.embedMissingChunks(signal);
-    searchableChanged ||= embedded > 0;
+    for (const path of embedded.documentPaths) {
+      journalPaths.add(path);
+    }
+    searchableChanged ||= embedded.count > 0;
     if (searchableChanged) {
       this.refreshSearchIndexMeasured();
     }
-    if (changed || embedded > 0) {
-      this.markDirty(Math.max(1, processed + embedded));
+    if (changed || embedded.count > 0) {
+      this.markDirty(Math.max(1, processed + embedded.count));
+      if (journalChanges) {
+        const delta = this.createJournalDelta(journalPaths);
+        if (delta.upserts.length > 0 || delta.removals.length > 0) {
+          try {
+            const sequence = await semanticDiagnostics.measure("index.journal_append_ms", () => {
+              return this.store.appendJournal(delta, this.journalIdentity());
+            });
+            semanticDiagnostics.setGauge("index.journal_sequence", sequence);
+            semanticDiagnostics.increment("index.journal_append_success");
+          } catch (error) {
+            semanticDiagnostics.increment("index.journal_append_failure");
+            this.scheduleCheckpoint(0);
+            throw error;
+          }
+        }
+      }
     }
     this.updateReadyStatus();
   }
 
-  private async embedMissingChunks(signal: AbortSignal): Promise<number> {
+  private async embedMissingChunks(signal: AbortSignal): Promise<EmbeddedChanges> {
     const client = this.embeddingClient;
     if (client === null || this.shouldStop()) {
-      return 0;
+      return { count: 0, documentPaths: [] };
     }
-    const inputs = [...this.chunks.values()]
-      .filter((chunk) => !this.vectors.has(chunk.id))
-      .map((chunk) => ({ id: chunk.id, text: chunk.embeddingText }));
-    if (inputs.length === 0) {
+    const missing = [...this.chunks.values()]
+      .filter((chunk) => !this.vectors.has(chunk.id));
+    if (missing.length === 0) {
       this.model = client.descriptor;
-      return 0;
+      return { count: 0, documentPaths: [] };
     }
     const result = await new EmbeddingBatcher(client).embed(
-      inputs,
+      missing.map((chunk) => ({ id: chunk.id, text: chunk.embeddingText })),
       signal,
       (completed, total) => {
         this.updateStatus("indexing", `Embedding passages ${completed}/${total}`);
       }
     );
     this.model = client.descriptor;
-    for (const [id, vector] of result.vectorsById) {
-      this.vectors.set(id, vector);
+    const documentPaths = new Set<string>();
+    for (const chunk of missing) {
+      const vector = result.vectorsById.get(chunk.id);
+      if (vector !== undefined) {
+        this.vectors.set(chunk.id, vector);
+        const document = this.documentsById.get(chunk.documentId);
+        if (document !== undefined) {
+          documentPaths.add(document.path);
+        }
+      }
     }
-    return result.vectorsById.size;
+    return {
+      count: result.vectorsById.size,
+      documentPaths: [...documentPaths]
+    };
   }
 
   private replaceDocument(parsed: ParsedIndexDocument): void {
@@ -623,6 +702,39 @@ export class PersistentIndexManager {
     return true;
   }
 
+  private createJournalDelta(paths: ReadonlySet<string>): IndexJournalDelta {
+    const upserts: JournalDocumentState[] = [];
+    const removals: string[] = [];
+    for (const path of [...paths].sort((left, right) => left.localeCompare(right))) {
+      const document = this.documents.get(path);
+      if (document === undefined) {
+        removals.push(path);
+        continue;
+      }
+      const chunks = document.chunkIds.flatMap((chunkId) => {
+        const chunk = this.chunks.get(chunkId);
+        if (chunk === undefined) {
+          return [];
+        }
+        return [{
+          chunk,
+          vector: this.vectors.get(chunkId) ?? null
+        }];
+      });
+      upserts.push({ document, chunks });
+    }
+    return { upserts, removals };
+  }
+
+  private journalIdentity(): IndexJournalIdentity {
+    return {
+      baseGeneration: this.generation,
+      vaultFingerprint: this.vaultFingerprint,
+      scopeFingerprint: this.scopeFingerprint,
+      model: this.model
+    };
+  }
+
   private markDirty(changeCount: number): void {
     const delayMs = this.checkpointState.markDirty(changeCount);
     semanticDiagnostics.increment("index.pending_changes", changeCount);
@@ -652,6 +764,7 @@ export class PersistentIndexManager {
       this.checkpointState.succeed();
       semanticDiagnostics.increment("index.checkpoint_success");
       semanticDiagnostics.setGauge("index.pending_change_count", 0);
+      semanticDiagnostics.setGauge("index.journal_sequence", 0);
     } catch (error) {
       this.checkpointState.fail();
       semanticDiagnostics.increment("index.checkpoint_failure");
@@ -773,7 +886,7 @@ export class PersistentIndexManager {
       ? "Passages are ready; install or load the local model to create vectors."
       : `${this.vectors.size} passage vectors are ready.`;
     const durabilityMessage = this.checkpointState.current.dirty
-      ? " Changes are searchable now; a local checkpoint is pending."
+      ? " Changes are searchable and journalled; a compact checkpoint is pending."
       : " The local checkpoint is current.";
     this.updateStatus("ready", message ?? `${vectorMessage}${durabilityMessage}`, {
       ...resetProgress(),

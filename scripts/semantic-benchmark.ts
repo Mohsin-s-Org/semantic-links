@@ -1,5 +1,5 @@
 import {
-  SemanticDiagnostics,
+  semanticDiagnostics,
   summarizeDistribution
 } from "../src/diagnostics/performance.ts";
 import { topDotProducts } from "../src/retrieval/exact-search.ts";
@@ -9,11 +9,10 @@ const sizes = process.argv.includes("--large")
   ? [1_000, 10_000, 50_000, 100_000]
   : [1_000, 5_000, 10_000];
 const samplesPerSize = 20;
-const diagnostics = new SemanticDiagnostics();
 const query = normalizedVector(dimensions, 17);
 const results: Record<string, ReturnType<typeof summarizeDistribution>> = {};
 
-diagnostics.start();
+semanticDiagnostics.start();
 for (const size of sizes) {
   const candidates = Array.from({ length: size }, (_, index) => ({
     value: index,
@@ -33,7 +32,7 @@ for (const size of sizes) {
   }
   results[String(size)] = summarizeDistribution(samples);
 }
-const diagnosticsReport = diagnostics.stop();
+const diagnosticsReport = semanticDiagnostics.stop();
 
 process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,

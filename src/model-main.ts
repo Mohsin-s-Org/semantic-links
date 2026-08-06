@@ -53,12 +53,6 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     );
     await this.configureStoredThreadProfile();
 
-    const markActivity = (): void => backgroundEmbeddingBatches.markActivity();
-    this.registerDomEvent(document, "keydown", markActivity, { capture: true });
-    this.registerDomEvent(document, "input", markActivity, { capture: true });
-    this.registerDomEvent(document, "pointerdown", markActivity, { capture: true });
-    this.registerEvent(this.app.workspace.on("active-leaf-change", markActivity));
-
     this.addCommand({
       id: DOWNLOAD_MODEL_COMMAND_ID,
       name: "Download local semantic model",
@@ -142,6 +136,10 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       DEFAULT_BACKGROUND_BATCH_SIZE
     );
     super.onunload();
+  }
+
+  protected override onEditorActivity(): void {
+    backgroundEmbeddingBatches.markActivity();
   }
 
   protected override async searchSemanticMatches(

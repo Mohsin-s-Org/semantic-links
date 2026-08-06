@@ -64,6 +64,7 @@ export type IndexPhase =
   | "opening"
   | "ready"
   | "indexing"
+  | "checkpointing"
   | "paused"
   | "deleting"
   | "error";
@@ -76,6 +77,9 @@ export interface IndexStatus {
   queuedCount: number;
   processedCount: number;
   totalCount: number;
+  dirty: boolean;
+  checkpointing: boolean;
+  pendingChanges: number;
   message: string;
   lastCompletedAt: number | null;
 }

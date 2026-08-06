@@ -1,8 +1,10 @@
 import { Notice } from "obsidian";
 import {
   COPY_DIAGNOSTICS_REPORT_COMMAND_ID,
+  DEFAULT_BACKGROUND_BATCH_SIZE,
   DOWNLOAD_MODEL_COMMAND_ID,
   REMOVE_MODEL_COMMAND_ID,
+  RESET_BACKGROUND_TUNING_COMMAND_ID,
   RUN_RELEVANCE_EVALUATION_COMMAND_ID,
   START_DIAGNOSTICS_COMMAND_ID,
   STOP_DIAGNOSTICS_COMMAND_ID
@@ -11,6 +13,9 @@ import { semanticDiagnostics } from "./diagnostics/performance.ts";
 import type { SuggestionContext } from "./editor/context.ts";
 import { LocalModelManager } from "./embeddings/model-manager.ts";
 import { runLocalRelevanceEvaluation } from "./evaluation/local-evaluation.ts";
+import {
+  backgroundEmbeddingBatches
+} from "./indexing/adaptive-embedding-batches.ts";
 import BaseSemanticLinksPlugin from "./main.ts";
 import type { SemanticMatch } from "./retrieval/semantic-types.ts";
 import { ModelRemovalModal } from "./ui/model-removal-modal.ts";
@@ -23,6 +28,17 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
 
   override async onload(): Promise<void> {
     await super.onload();
+    backgroundEmbeddingBatches.configurePersistence(
+      this.settings.backgroundEmbeddingBatchLimit,
+      (limit) => {
+        void this.persistBackgroundBatchLimit(limit).catch(() => undefined);
+      }
+    );
+    const markActivity = (): void => backgroundEmbeddingBatches.markActivity();
+    this.registerDomEvent(document, "keydown", markActivity, { capture: true });
+    this.registerDomEvent(document, "input", markActivity, { capture: true });
+    this.registerDomEvent(document, "pointerdown", markActivity, { capture: true });
+    this.registerEvent(this.app.workspace.on("active-leaf-change", markActivity));
 
     this.addCommand({
       id: DOWNLOAD_MODEL_COMMAND_ID,
@@ -33,6 +49,15 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
       id: REMOVE_MODEL_COMMAND_ID,
       name: "Remove local semantic model and vectors",
       callback: () => this.requestModelRemoval()
+    });
+    this.addCommand({
+      id: RESET_BACKGROUND_TUNING_COMMAND_ID,
+      name: "Reset background embedding tuning",
+      callback: () => {
+        void this.resetBackgroundBatchTuning().catch(() => {
+          new Notice("Background embedding tuning could not be reset.");
+        });
+      }
     });
     this.addCommand({
       id: START_DIAGNOSTICS_COMMAND_ID,
@@ -83,6 +108,9 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     }
     this.semanticLifecycle.abort();
     this.modelManager.dispose();
+    backgroundEmbeddingBatches.configurePersistence(
+      DEFAULT_BACKGROUND_BATCH_SIZE
+    );
     super.onunload();
   }
 
@@ -177,6 +205,13 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     await this.saveSettings();
   }
 
+  async resetBackgroundBatchTuning(): Promise<void> {
+    backgroundEmbeddingBatches.resetTuning();
+    this.settings.backgroundEmbeddingBatchLimit = DEFAULT_BACKGROUND_BATCH_SIZE;
+    await this.saveData(this.settings);
+    new Notice("Background embedding tuning was reset to the conservative batch size.");
+  }
+
   private startDiagnostics(): void {
     semanticDiagnostics.start();
     new Notice("Local semantic diagnostics started. No note content is recorded.");
@@ -248,6 +283,14 @@ export default class SemanticLinksPlugin extends BaseSemanticLinksPlugin {
     }
     const client = await this.modelManager.loadCached();
     await (await this.waitForIndexManager())?.setEmbeddingClient(client);
+  }
+
+  private async persistBackgroundBatchLimit(limit: number): Promise<void> {
+    if (this.settings.backgroundEmbeddingBatchLimit === limit) {
+      return;
+    }
+    this.settings.backgroundEmbeddingBatchLimit = limit;
+    await this.saveData(this.settings);
   }
 
   private async waitForIndexManager(): Promise<typeof this.indexManager> {

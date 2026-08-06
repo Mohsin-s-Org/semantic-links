@@ -34,6 +34,15 @@ class MemoryAdapter implements IndexStorageAdapter {
     return Promise.resolve();
   }
 
+  append(path: string, data: string): Promise<void> {
+    const current = this.files.get(path);
+    if (current instanceof ArrayBuffer) {
+      return Promise.reject(new Error(`Cannot append text to binary file: ${path}`));
+    }
+    this.files.set(path, `${current ?? ""}${data}`);
+    return Promise.resolve();
+  }
+
   writeBinary(path: string, data: ArrayBuffer): Promise<void> {
     this.files.set(path, data.slice(0));
     return Promise.resolve();
@@ -94,7 +103,7 @@ test("round-trips validated documents, chunks and row-major vectors", async () =
   assert.equal(opened.documents[0]?.path, "Notes/first.md");
   assert.equal(opened.chunks[0]?.vectorRow, 0);
   assert.deepEqual([...opened.vectors], [0.25, 0.75]);
-  assert.equal(await adapter.exists("plugin/index/journal.json"), false);
+  assert.equal(await adapter.exists("plugin/index/journal.ndjson"), false);
 });
 
 test("restores the last validated generation after an interrupted write", async () => {

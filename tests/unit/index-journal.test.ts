@@ -68,7 +68,7 @@ test("replays appended replacement and removal records", async () => {
   assert.equal(replayed.lastSequence, 2);
   assert.equal(replayed.snapshot.documents.length, 1);
   assert.equal(replayed.snapshot.documents[0]?.path, "Notes/changed.md");
-  assert.deepEqual([...replayed.snapshot.vectors], approximately([0.8, 0.2]));
+  assertVectorClose(replayed.snapshot.vectors, [0.8, 0.2]);
 });
 
 test("repairs a partial trailing record while preserving earlier records", async () => {
@@ -198,6 +198,9 @@ function createDocument(path: string, name: string): IndexedDocument {
   };
 }
 
-function approximately(values: readonly number[]): number[] {
-  return values.map((value) => Number(new Float32Array([value])[0]?.toFixed(6)));
+function assertVectorClose(actual: Float32Array, expected: readonly number[]): void {
+  assert.equal(actual.length, expected.length);
+  actual.forEach((value, index) => {
+    assert.ok(Math.abs(value - (expected[index] ?? Number.NaN)) < 1e-6);
+  });
 }

@@ -79,6 +79,8 @@ export class IndexStatusView extends ItemView {
     metric(metrics, "Passages", status.chunkCount);
     metric(metrics, "Vectors", status.vectorCount);
     metric(metrics, "Queued", status.queuedCount);
+    metric(metrics, "Pending changes", status.pendingChanges);
+    metric(metrics, "Durability", status.checkpointing ? "Saving" : status.dirty ? "Pending" : "Saved");
 
     if (status.totalCount > 0 && status.phase === "indexing") {
       const progress = this.contentEl.createEl("progress", {
@@ -95,13 +97,13 @@ export class IndexStatusView extends ItemView {
     if (status.lastCompletedAt !== null) {
       this.contentEl.createEl("p", {
         cls: "semantic-links-index-view__completed",
-        text: `Last completed ${new Date(status.lastCompletedAt).toLocaleString()}`
+        text: `Last checkpoint ${new Date(status.lastCompletedAt).toLocaleString()}`
       });
     }
 
     const actions = this.contentEl.createDiv({ cls: "semantic-links-index-view__actions" });
     const rebuild = actions.createEl("button", { text: "Rebuild index" });
-    rebuild.disabled = status.phase === "indexing" || status.phase === "deleting";
+    rebuild.disabled = isBusy(status.phase);
     rebuild.addEventListener("click", () => {
       void this.host.rebuildSemanticIndex();
     });
@@ -109,14 +111,14 @@ export class IndexStatusView extends ItemView {
       cls: "mod-warning",
       text: "Delete local index"
     });
-    remove.disabled = status.phase === "indexing" || status.phase === "deleting";
+    remove.disabled = isBusy(status.phase);
     remove.addEventListener("click", () => {
       this.host.requestSemanticIndexDeletion();
     });
   }
 }
 
-function metric(container: HTMLElement, label: string, value: number): void {
+function metric(container: HTMLElement, label: string, value: number | string): void {
   const item = container.createDiv({ cls: "semantic-links-index-view__metric" });
   item.createEl("span", { text: label });
   item.createEl("strong", { text: String(value) });
@@ -128,8 +130,13 @@ function formatPhase(phase: IndexStatus["phase"]): string {
     case "opening": return "Opening";
     case "ready": return "Ready";
     case "indexing": return "Indexing";
+    case "checkpointing": return "Saving";
     case "paused": return "Disabled";
     case "deleting": return "Deleting";
     case "error": return "Error";
   }
+}
+
+function isBusy(phase: IndexStatus["phase"]): boolean {
+  return phase === "indexing" || phase === "checkpointing" || phase === "deleting";
 }

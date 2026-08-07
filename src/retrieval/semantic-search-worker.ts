@@ -238,7 +238,7 @@ export class SemanticSearchWorker {
     const scores = value["scores"];
     if (
       typeof id !== "number"
-      || generation !== this.generation
+      || typeof generation !== "number"
       || !(rows instanceof Int32Array)
       || !(scores instanceof Float32Array)
       || rows.length !== scores.length
@@ -249,6 +249,14 @@ export class SemanticSearchWorker {
     const pending = this.pending.get(id);
     if (pending === undefined) {
       semanticDiagnostics.increment("search.worker_stale_result");
+      return;
+    }
+    if (generation !== this.generation) {
+      this.pending.delete(id);
+      pending.removeAbortListener();
+      pending.finish();
+      semanticDiagnostics.increment("search.worker_stale_generation");
+      pending.reject(new Error("The semantic search index changed during the request."));
       return;
     }
     this.pending.delete(id);

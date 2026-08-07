@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffWorkerSnapshot } from "../../src/retrieval/semantic-search-worker.ts";
+import {
+  SemanticSearchWorker,
+  diffWorkerSnapshot
+} from "../../src/retrieval/semantic-search-worker.ts";
 
 test("emits only a newly added row", () => {
   const diff = diffWorkerSnapshot(
@@ -93,6 +96,61 @@ test("rejects malformed snapshots", () => {
     new Int32Array(),
     -1
   ));
+});
+
+test("settles an in-flight search when its worker generation becomes stale", async () => {
+  const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+  let created: FakeWorker | null = null;
+
+  class FakeWorker {
+    onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
+
+    constructor() {
+      created = this;
+    }
+
+    postMessage(): void {}
+    terminate(): void {}
+  }
+
+  Object.defineProperty(globalThis, "Worker", {
+    configurable: true,
+    writable: true,
+    value: FakeWorker
+  });
+
+  try {
+    const worker = new SemanticSearchWorker();
+    worker.update(vectors([1, 0]), documents(0), 2);
+    const pending = worker.search(
+      vectors([1, 0]),
+      -1,
+      1,
+      new AbortController().signal
+    );
+    const rejected = assert.rejects(pending, /index changed during the request/u);
+
+    worker.update(vectors([0, 1]), documents(0), 2);
+    assert.ok(created);
+    created.onmessage?.({
+      data: {
+        type: "result",
+        id: 1,
+        generation: 1,
+        rows: documents(0),
+        scores: new Float32Array([1])
+      }
+    } as MessageEvent<unknown>);
+
+    await rejected;
+    worker.dispose();
+  } finally {
+    if (workerDescriptor === undefined) {
+      Reflect.deleteProperty(globalThis, "Worker");
+    } else {
+      Object.defineProperty(globalThis, "Worker", workerDescriptor);
+    }
+  }
 });
 
 function vectors(...rows: number[][]): Float32Array {

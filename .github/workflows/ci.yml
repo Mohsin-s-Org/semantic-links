@@ -38,7 +38,7 @@ jobs:
         run: npm test
 
       - name: Build production bundle
-        run: npm run build
+        run: npm run bundle
 
       - name: Verify reproducible production bundle
         run: npm run verify:reproducible-build

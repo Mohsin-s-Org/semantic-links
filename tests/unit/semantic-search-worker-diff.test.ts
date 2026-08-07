@@ -100,13 +100,13 @@ test("rejects malformed snapshots", () => {
 
 test("settles an in-flight search when its worker generation becomes stale", async () => {
   const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Worker");
-  let created: FakeWorker | null = null;
+  const holder: { worker?: FakeWorker } = {};
 
   class FakeWorker {
     onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
 
     constructor() {
-      created = this;
+      holder.worker = this;
     }
 
     postMessage(): void {}
@@ -131,8 +131,11 @@ test("settles an in-flight search when its worker generation becomes stale", asy
     const rejected = assert.rejects(pending, /index changed during the request/u);
 
     worker.update(vectors([0, 1]), documents(0), 2);
-    assert.ok(created);
-    created.onmessage?.({
+    const fakeWorker = holder.worker;
+    if (fakeWorker === undefined) {
+      throw new Error("Fake worker was not created.");
+    }
+    fakeWorker.onmessage?.({
       data: {
         type: "result",
         id: 1,

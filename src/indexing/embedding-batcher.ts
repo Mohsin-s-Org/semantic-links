@@ -4,10 +4,10 @@ import {
 } from "../constants.ts";
 import { semanticDiagnostics } from "../diagnostics/performance.ts";
 import {
-  AdaptiveEmbeddingBatchController,
   backgroundEmbeddingBatches,
   detectEmbeddingMemoryPressure,
-  type AdaptiveBatchSignals
+  type AdaptiveBatchSignals,
+  type AdaptiveEmbeddingBatchController
 } from "./adaptive-embedding-batches.ts";
 import {
   EmbeddingBatchQueue,

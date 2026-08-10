@@ -5,6 +5,7 @@ import {
   type SettingDefinitionItem
 } from "obsidian";
 import {
+  DEFAULT_BACKGROUND_BATCH_SIZE,
   MAX_DEBOUNCE_MS,
   MAX_SUGGESTIONS,
   MIN_DEBOUNCE_MS,
@@ -17,10 +18,16 @@ import type { SemanticLinksSettings } from "./types.ts";
 type SettingsHost = Plugin & {
   settings: SemanticLinksSettings;
   saveSettings(): Promise<void>;
+  openModelSetup?(): void;
+  requestModelRemoval?(): void;
+  setModelEnabled?(enabled: boolean): Promise<void>;
+  tuneModelThreads?(): Promise<void>;
+  useAutomaticModelThreads?(): Promise<void>;
+  resetBackgroundBatchTuning?(): Promise<void>;
 };
 
 type SettingKey = keyof SemanticLinksSettings & string;
-type ListSettingKey = "excludedFolders" | "excludedTags";
+type ListSettingKey = "excludedFolders" | "excludedFiles" | "excludedTags" | "excludedProperties";
 
 export class SemanticLinksSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly owner: SettingsHost) {
@@ -79,19 +86,22 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
           defaultValue: DEFAULT_SETTINGS.lexicalMatchingEnabled
         }
       },
+      this.modelSetting(),
+      this.threadTuningSetting(),
       {
         name: "Semantic indexing",
-        desc: "Reserve embedding-based matching for a later local-model phase. Phase 2 performs no model or network work.",
-        aliases: ["embeddings", "model matching"],
+        desc: "Prepare eligible Markdown passages and keep their local vectors current when the semantic model is enabled.",
+        aliases: ["embeddings", "model matching", "persistent index"],
         control: {
           type: "toggle",
           key: "semanticIndexingEnabled",
           defaultValue: DEFAULT_SETTINGS.semanticIndexingEnabled
         }
       },
+      this.backgroundTuningSetting(),
       {
         name: "Minimum confidence",
-        desc: "Hide candidates below this normalized lexical score.",
+        desc: "Hide lexical candidates below this normalized score. Semantic similarity is rank-normalized before hybrid scoring.",
         aliases: ["confidence threshold", "minimum score"],
         control: {
           type: "number",
@@ -110,11 +120,24 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         "Archive\nPrivate"
       ),
       this.listSetting(
+        "excludedFiles",
+        "Excluded files",
+        "One vault-relative Markdown path per line or a comma-separated list.",
+        "Private/Journal.md\nArchive/Old notes.md"
+      ),
+      this.listSetting(
         "excludedTags",
         "Excluded tags",
         "One tag per line or a comma-separated list. A leading # is optional.",
         "private\ndraft",
         (values) => values.map((tag) => tag.replace(/^#/u, "").toLocaleLowerCase())
+      ),
+      this.listSetting(
+        "excludedProperties",
+        "Excluded property rules",
+        "Use a property name to exclude it whenever present, or property=value to match one value. Rules are case-insensitive.",
+        "private\npublish=false",
+        (values) => values.map((property) => property.toLocaleLowerCase())
       ),
       this.heading("Link insertion"),
       {
@@ -132,6 +155,100 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
         }
       }
     ];
+  }
+
+  private modelSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Local semantic model",
+      aliases: ["download model", "remove model", "semantic matching", "E5"],
+      render: (setting) => {
+        const installed = this.owner.settings.semanticModelInstalled;
+        setting.setDesc(installed
+          ? "The verified multilingual model is stored locally. Disable it to unload inference memory while retaining the cache and vectors."
+          : "Download the verified multilingual model after reviewing its size and local-only privacy details.");
+        if (installed) {
+          setting.addToggle((toggle) => {
+            toggle
+              .setValue(this.owner.settings.semanticModelEnabled)
+              .onChange((value) => {
+                void this.owner.setModelEnabled?.(value).catch(() => {
+                  toggle.setValue(this.owner.settings.semanticModelEnabled);
+                });
+              });
+          });
+          setting.addButton((button) => {
+            button.setWarning().setButtonText("Remove").onClick(() => {
+              this.owner.requestModelRemoval?.();
+            });
+          });
+        } else {
+          setting.addButton((button) => {
+            button.setCta().setButtonText("Set up").onClick(() => {
+              this.owner.openModelSetup?.();
+            });
+          });
+        }
+      }
+    };
+  }
+
+  private threadTuningSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Local inference threads",
+      aliases: ["WASM threads", "thread benchmark", "automatic threads", "model performance"],
+      render: (setting) => {
+        const refresh = (): void => {
+          const { semanticThreadMode, semanticThreadCount } = this.owner.settings;
+          const selected = semanticThreadMode === "tuned"
+            ? `${semanticThreadCount} tuned WASM thread${semanticThreadCount === 1 ? "" : "s"}`
+            : "automatic ONNX Runtime selection";
+          setting.setDesc(
+            `Current: ${selected}. Tuning tests only the cached local model and stores no hardware identifier. The proxy worker protects responsiveness; it does not itself make inference faster.`
+          );
+        };
+        refresh();
+        setting.addButton((button) => {
+          button.setButtonText("Tune").onClick(() => {
+            this.runAndRefresh(this.owner.tuneModelThreads, refresh);
+          });
+        });
+        setting.addButton((button) => {
+          button.setButtonText("Use automatic").onClick(() => {
+            this.runAndRefresh(this.owner.useAutomaticModelThreads, refresh);
+          });
+        });
+      }
+    };
+  }
+
+  private backgroundTuningSetting(): SettingDefinitionItem<SettingKey> {
+    return {
+      name: "Background embedding tuning",
+      aliases: ["batch tuning", "indexing performance", "reset embedding batches"],
+      render: (setting) => {
+        const refresh = (): void => {
+          setting.setDesc(
+            `Idle indexing may use batches up to ${this.owner.settings.backgroundEmbeddingBatchLimit}. Typing, queued queries and memory pressure always return to ${DEFAULT_BACKGROUND_BATCH_SIZE}.`
+          );
+        };
+        refresh();
+        setting.addButton((button) => {
+          button.setButtonText("Reset").onClick(() => {
+            this.runAndRefresh(this.owner.resetBackgroundBatchTuning, refresh);
+          });
+        });
+      }
+    };
+  }
+
+  private runAndRefresh(
+    action: (() => Promise<void>) | undefined,
+    refresh: () => void
+  ): void {
+    if (action === undefined) {
+      return;
+    }
+    void action.call(this.owner).then(refresh, refresh);
   }
 
   private heading(name: string): SettingDefinitionItem<SettingKey> {
@@ -161,7 +278,7 @@ export class SemanticLinksSettingTab extends PluginSettingTab {
             .setPlaceholder(placeholder)
             .onChange((value) => {
               this.owner.settings[key] = transform(normalizeDelimitedList(value));
-              void this.owner.saveSettings();
+              void this.owner.saveSettings().catch(() => undefined);
             });
           text.inputEl.addClass("semantic-links-settings-list");
         });

@@ -2,9 +2,17 @@ import type { EditorView } from "@codemirror/view";
 import {
   Notice,
   Plugin,
-  type TFile
+  normalizePath,
+  type TFile,
+  type WorkspaceLeaf
 } from "obsidian";
-import { SHOW_SUGGESTIONS_COMMAND_ID } from "./constants.ts";
+import {
+  DELETE_INDEX_COMMAND_ID,
+  INDEX_STATUS_VIEW_TYPE,
+  REBUILD_INDEX_COMMAND_ID,
+  SHOW_INDEX_STATUS_COMMAND_ID,
+  SHOW_SUGGESTIONS_COMMAND_ID
+} from "./constants.ts";
 import type {
   EditorSuggestionController,
   SuggestionRequestTicket
@@ -32,17 +40,35 @@ import {
   showSuggestions,
   type SuggestionPopupState
 } from "./editor/suggestion-popup.ts";
+import { hashText } from "./indexing/hash.ts";
+import { PersistentIndexManager } from "./indexing/index-manager.ts";
+import { createIndexScopeFingerprint } from "./indexing/scope-fingerprint.ts";
 import { meaningfulLexicalTokens } from "./lexical/text.ts";
 import type { LexicalSuggestion } from "./lexical/types.ts";
 import {
   LexicalVaultIndex,
   isMarkdownFile
 } from "./lexical/vault-index.ts";
+import { mergeHybridSuggestions } from "./retrieval/hybrid.ts";
+import {
+  hasEnabledMatching,
+  shouldRunLexicalMatching
+} from "./retrieval/matching-policy.ts";
+import type { SemanticMatch } from "./retrieval/semantic-types.ts";
 import { isFileExcluded } from "./scope/exclusions.ts";
 import { createDefaultSettings } from "./settings/defaults.ts";
 import { loadAndMigrateSettings } from "./settings/schema.ts";
 import { SemanticLinksSettingTab } from "./settings/settings-tab.ts";
 import type { SemanticLinksSettings } from "./settings/types.ts";
+import {
+  createEmptyIndexManifest,
+  PersistentIndexStore
+} from "./storage/index-store.ts";
+import { DeleteIndexModal } from "./ui/delete-index-modal.ts";
+import {
+  IndexStatusView,
+  type IndexStatusViewHost
+} from "./views/index-status-view.ts";
 
 const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
   "invalid-range": "The selected text range is no longer valid.",
@@ -54,8 +80,9 @@ const INSERTION_FAILURE_MESSAGES: Record<InsertWikilinkFailureCode, string> = {
   "dispatch-failed": "The editor rejected the link transaction."
 };
 
-export default class SemanticLinksPlugin extends Plugin {
+export default class SemanticLinksPlugin extends Plugin implements IndexStatusViewHost {
   override settings: SemanticLinksSettings = createDefaultSettings();
+  indexManager: PersistentIndexManager | null = null;
 
   private readonly controllers = new EditorControllerRegistry();
   private readonly lifecycle = new AbortController();
@@ -63,8 +90,7 @@ export default class SemanticLinksPlugin extends Plugin {
   private statusBarElement: HTMLElement | null = null;
 
   override async onload(): Promise<void> {
-    const savedData: unknown = await this.loadData();
-    const loaded = loadAndMigrateSettings(savedData);
+    const loaded = loadAndMigrateSettings(await this.loadData() as unknown);
     this.settings = loaded.settings;
     if (loaded.needsSave) {
       await this.saveSettings();
@@ -74,6 +100,7 @@ export default class SemanticLinksPlugin extends Plugin {
     this.addSettingTab(new SemanticLinksSettingTab(this.app, this));
     this.statusBarElement = this.addStatusBarItem();
     this.setStatus("loading");
+    this.registerView(INDEX_STATUS_VIEW_TYPE, (leaf) => new IndexStatusView(leaf, this));
 
     this.registerEditorExtension(createControllerExtension(
       this.controllers,
@@ -83,26 +110,42 @@ export default class SemanticLinksPlugin extends Plugin {
     ));
     this.registerEditorExtension(createSuggestionPopupExtension({
       accept: (view, popup, suggestion) => {
-        this.acceptLexicalSuggestion(view, popup, suggestion);
+        this.acceptSuggestion(view, popup, suggestion);
       }
     }));
 
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
       this.controllers.clearActive();
       this.controllers.invalidateAll();
+      this.onEditorActivity();
     }));
 
     this.addCommand({
       id: SHOW_SUGGESTIONS_COMMAND_ID,
       name: "Show link suggestions",
       hotkeys: [{ modifiers: ["Alt"], key: "l" }],
-      callback: () => {
-        this.openSuggestionPopup();
-      }
+      callback: () => this.openSuggestionPopup()
+    });
+    this.addCommand({
+      id: SHOW_INDEX_STATUS_COMMAND_ID,
+      name: "Show index status",
+      callback: () => void this.openIndexStatus()
+    });
+    this.addCommand({
+      id: REBUILD_INDEX_COMMAND_ID,
+      name: "Rebuild semantic index",
+      callback: () => void this.rebuildSemanticIndex()
+    });
+    this.addCommand({
+      id: DELETE_INDEX_COMMAND_ID,
+      name: "Delete local semantic index",
+      callback: () => this.requestSemanticIndexDeletion()
     });
 
     this.app.workspace.onLayoutReady(() => {
-      void this.initializeLexicalIndex();
+      void this.initializeIndexes().catch(() => {
+        new Notice("Semantic Links could not finish preparing its local indexes.");
+      });
     });
   }
 
@@ -111,53 +154,175 @@ export default class SemanticLinksPlugin extends Plugin {
     this.controllers.dispose();
     this.lexicalIndex?.dispose();
     this.lexicalIndex = null;
+    this.indexManager?.dispose();
+    this.indexManager = null;
+    this.app.workspace.detachLeavesOfType(INDEX_STATUS_VIEW_TYPE);
     this.statusBarElement = null;
   }
 
   async saveSettings(): Promise<void> {
     this.lexicalIndex?.scheduleScopeRebuild();
+    this.indexManager?.scheduleScopeRebuild();
     await this.saveData(this.settings);
   }
 
-  private async initializeLexicalIndex(): Promise<void> {
-    const lexicalIndex = this.lexicalIndex;
-    if (lexicalIndex === null || this.lifecycle.signal.aborted) {
+  async rebuildSemanticIndex(): Promise<void> {
+    const manager = this.indexManager;
+    if (manager === null) {
+      new Notice("The semantic index is not ready yet.");
       return;
     }
-
-    this.registerLexicalIndexEvents(lexicalIndex);
-    this.setStatus("indexing vault");
-    await lexicalIndex.rebuild(this.lifecycle.signal);
-    if (this.lifecycle.signal.aborted || !lexicalIndex.ready) {
+    if (!this.settings.semanticIndexingEnabled) {
+      new Notice("Enable semantic indexing in Semantic Links settings first.");
       return;
     }
-
-    this.setStatus(`ready · ${lexicalIndex.size} notes`);
+    try {
+      await manager.rebuild();
+      new Notice("Semantic Links rebuilt the local index.");
+    } catch {
+      new Notice("Semantic Links could not rebuild the local index. Open the index status view for details.");
+    }
   }
 
-  private registerLexicalIndexEvents(lexicalIndex: LexicalVaultIndex): void {
-    this.registerEvent(this.app.vault.on("create", (file) => {
-      if (isMarkdownFile(file)) {
-        lexicalIndex.scheduleRefresh(file);
+  requestSemanticIndexDeletion(): void {
+    const manager = this.indexManager;
+    if (manager === null) {
+      new Notice("The semantic index is not ready yet.");
+      return;
+    }
+    new DeleteIndexModal(this.app, () => {
+      void manager.deleteIndex()
+        .then(() => new Notice("Semantic Links deleted the local index."))
+        .catch(() => new Notice("Semantic Links could not delete the local index."));
+    }).open();
+  }
+
+  protected searchSemanticMatches(
+    _context: SuggestionContext,
+    _sourcePath: string,
+    _signal: AbortSignal
+  ): Promise<SemanticMatch[]> {
+    return Promise.resolve([]);
+  }
+
+  protected onEditorActivity(): void {}
+
+  private async initializeIndexes(): Promise<void> {
+    await this.initializeLexicalIndex();
+    if (!this.lifecycle.signal.aborted) {
+      await this.initializePersistentIndex();
+    }
+  }
+
+  private async initializeLexicalIndex(): Promise<void> {
+    const index = this.lexicalIndex;
+    if (index === null || this.lifecycle.signal.aborted) {
+      return;
+    }
+    this.registerLexicalIndexEvents(index);
+    this.setStatus("indexing vault");
+    await index.rebuild(this.lifecycle.signal);
+    if (!this.lifecycle.signal.aborted && index.ready) {
+      this.setStatus(`ready · ${index.size} notes`);
+    }
+  }
+
+  private async initializePersistentIndex(): Promise<void> {
+    if (this.lifecycle.signal.aborted || this.indexManager !== null) {
+      return;
+    }
+    const pluginRoot = normalizePath(
+      this.manifest.dir
+      ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`
+    );
+    const vaultFingerprint = hashText(this.app.vault.getName());
+    const store = new PersistentIndexStore(
+      this.app.vault.adapter,
+      normalizePath(`${pluginRoot}/index`),
+      () => createEmptyIndexManifest(
+        this.manifest.version,
+        vaultFingerprint,
+        createIndexScopeFingerprint(this.settings)
+      )
+    );
+    const manager = new PersistentIndexManager(
+      this.app,
+      store,
+      this.manifest.version,
+      vaultFingerprint,
+      () => this.settings
+    );
+    this.indexManager = manager;
+    this.bindIndexViews();
+    this.registerPersistentIndexEvents(manager);
+
+    try {
+      await manager.open();
+      if (!this.lifecycle.signal.aborted) {
+        await manager.reconcile();
       }
+    } catch {
+      new Notice("Semantic Links could not open the local semantic index. Lexical suggestions remain available.");
+    }
+  }
+
+  private registerLexicalIndexEvents(index: LexicalVaultIndex): void {
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (isMarkdownFile(file)) index.scheduleRefresh(file);
     }));
     this.registerEvent(this.app.vault.on("modify", (file) => {
-      if (isMarkdownFile(file)) {
-        lexicalIndex.scheduleRefresh(file);
-      }
+      if (isMarkdownFile(file)) index.scheduleRefresh(file);
     }));
-    this.registerEvent(this.app.vault.on("delete", (file) => {
-      lexicalIndex.remove(file.path);
-    }));
+    this.registerEvent(this.app.vault.on("delete", (file) => index.remove(file.path)));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      lexicalIndex.remove(oldPath);
+      index.remove(oldPath);
+      if (isMarkdownFile(file)) index.scheduleRefresh(file);
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      index.scheduleRefresh(file);
+    }));
+  }
+
+  private registerPersistentIndexEvents(manager: PersistentIndexManager): void {
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (isMarkdownFile(file)) manager.scheduleRefresh(file);
+    }));
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (isMarkdownFile(file)) manager.scheduleRefresh(file);
+    }));
+    this.registerEvent(this.app.vault.on("delete", (file) => manager.scheduleRemove(file.path)));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (isMarkdownFile(file)) {
-        lexicalIndex.scheduleRefresh(file);
+        manager.scheduleRename(file, oldPath);
+      } else {
+        manager.scheduleRemove(oldPath);
       }
     }));
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {
-      lexicalIndex.scheduleRefresh(file);
+      manager.scheduleRefresh(file);
     }));
+  }
+
+  private async openIndexStatus(): Promise<void> {
+    let leaf: WorkspaceLeaf | null = this.app.workspace
+      .getLeavesOfType(INDEX_STATUS_VIEW_TYPE)[0] ?? null;
+    if (leaf === null) {
+      leaf = this.app.workspace.getRightLeaf(false);
+      if (leaf === null) {
+        new Notice("Obsidian could not open the Semantic Links index view.");
+        return;
+      }
+      await leaf.setViewState({ type: INDEX_STATUS_VIEW_TYPE, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+  }
+
+  private bindIndexViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(INDEX_STATUS_VIEW_TYPE)) {
+      if (leaf.view instanceof IndexStatusView) {
+        leaf.view.bindManager();
+      }
+    }
   }
 
   private handleContextChanged(
@@ -165,90 +330,70 @@ export default class SemanticLinksPlugin extends Plugin {
     controller: EditorSuggestionController,
     documentVersion: number
   ): void {
+    this.onEditorActivity();
     hideSuggestions(view);
-
-    const lexicalIndex = this.lexicalIndex;
+    const index = this.lexicalIndex;
     if (
-      lexicalIndex === null
-      || !lexicalIndex.ready
+      index === null
+      || !index.ready
       || !this.settings.automaticSuggestions
-      || !this.settings.lexicalMatchingEnabled
+      || !hasEnabledMatching(this.settings)
     ) {
       return;
     }
-
-    const sourceFile = this.app.workspace.getActiveFile();
-    if (sourceFile === null || this.isExcluded(sourceFile)) {
-      return;
-    }
-
+    const source = this.app.workspace.getActiveFile();
     const context = this.readContext(view);
-    if (context === null || !this.isEligibleAutomaticAnchor(context.anchor.text)) {
+    if (
+      source === null
+      || this.isExcluded(source)
+      || context === null
+      || !this.isEligibleAutomaticAnchor(context.anchor.text)
+    ) {
       return;
     }
-
-    const requestKey = this.createRequestKey(
-      sourceFile.path,
-      documentVersion,
-      context,
-      "automatic"
-    );
-    controller.schedule(requestKey, this.settings.debounceMs, (ticket) => {
-      return this.searchAndShow(
-        view,
-        controller,
-        ticket,
-        documentVersion,
-        false,
-        false
-      );
+    const key = this.createRequestKey(source.path, documentVersion, context, "automatic");
+    controller.schedule(key, this.settings.debounceMs, (ticket) => {
+      return this.searchAndShow(view, controller, ticket, documentVersion, false, false);
     });
   }
 
   private openSuggestionPopup(): void {
     const active = this.controllers.getActive();
-    const sourceFile = this.app.workspace.getActiveFile();
-    const lexicalIndex = this.lexicalIndex;
-    if (active === null || sourceFile === null) {
+    const source = this.app.workspace.getActiveFile();
+    const index = this.lexicalIndex;
+    if (active === null || source === null) {
       new Notice("Open a Markdown note and place the cursor in eligible text first.");
       return;
     }
     if (enableSuggestionKeyboard(active.view)) {
       return;
     }
-    if (lexicalIndex === null || !lexicalIndex.ready) {
+    if (index === null || !index.ready) {
       new Notice("The local lexical index is still being prepared.");
       return;
     }
-    if (!this.settings.lexicalMatchingEnabled) {
-      new Notice("Enable lexical matching in Semantic Links settings first.");
+    if (!hasEnabledMatching(this.settings)) {
+      new Notice("Enable lexical or semantic matching in Semantic Links settings first.");
       return;
     }
-    if (this.isExcluded(sourceFile)) {
+    if (this.isExcluded(source)) {
       new Notice("This note is excluded from Semantic Links.");
       return;
     }
-
     const context = this.readContext(active.view);
     if (context === null) {
       new Notice("Place the cursor in eligible prose or select a phrase first.");
       return;
     }
-
-    const documentVersion = active.controller.documentVersion;
-    const requestKey = this.createRequestKey(
-      sourceFile.path,
-      documentVersion,
-      context,
-      "manual"
-    );
+    const version = active.controller.documentVersion;
+    const key = this.createRequestKey(source.path, version, context, "manual");
     active.controller.invalidate();
-    active.controller.schedule(requestKey, 0, (ticket) => {
+    active.controller.schedule(key, 0, (ticket) => {
       return this.searchAndShow(
         active.view,
         active.controller,
         ticket,
-        documentVersion,
+        version,
         true,
         true
       );
@@ -267,89 +412,124 @@ export default class SemanticLinksPlugin extends Plugin {
     if (ticket.signal.aborted || !view.hasFocus) {
       return;
     }
-
-    const lexicalIndex = this.lexicalIndex;
-    const sourceFile = this.app.workspace.getActiveFile();
+    const index = this.lexicalIndex;
+    const source = this.app.workspace.getActiveFile();
+    const context = this.readContext(view);
     if (
-      lexicalIndex === null
-      || !lexicalIndex.ready
-      || sourceFile === null
-      || sourceFile.path !== ticket.key.filePath
+      index === null
+      || !index.ready
+      || source === null
+      || source.path !== ticket.key.filePath
+      || context === null
     ) {
       return;
     }
 
-    const context = this.readContext(view);
-    if (context === null) {
-      return;
-    }
-    const currentKey = this.createRequestKey(
-      sourceFile.path,
+    let currentKey = this.createRequestKey(
+      source.path,
       documentVersion,
       context,
       ticket.key.mode
     );
-    const suggestions = lexicalIndex.search({
-      anchorText: context.anchor.text,
-      contextText: context.searchText,
-      sourcePath: sourceFile.path,
-      limit: this.settings.maxSuggestions,
-      minimumScore: this.settings.minimumConfidence
-    });
+    const lexical = shouldRunLexicalMatching(this.settings)
+      ? index.search({
+          anchorText: context.anchor.text,
+          contextText: context.searchText,
+          sourcePath: source.path,
+          limit: this.settings.maxSuggestions,
+          minimumScore: this.settings.minimumConfidence
+        })
+      : [];
     if (!controller.acceptResult(ticket, currentKey)) {
       return;
     }
-    if (suggestions.length === 0) {
-      hideSuggestions(view);
-      if (notifyWhenEmpty) {
-        new Notice("No lexical link suggestions were found for this context.");
-      }
-      this.setStatus(`ready · ${lexicalIndex.size} notes`);
+    if (lexical.length > 0) {
+      this.showResults(view, currentKey, lexical, keyboardActive);
+    }
+
+    const semantic = isSemanticContext(context.searchText)
+      ? await this.searchSemanticMatches(context, source.path, ticket.signal)
+      : [];
+    if (ticket.signal.aborted) {
+      return;
+    }
+    const latestContext = this.readContext(view);
+    const latestSource = this.app.workspace.getActiveFile();
+    if (latestContext === null || latestSource?.path !== source.path) {
+      return;
+    }
+    currentKey = this.createRequestKey(
+      source.path,
+      documentVersion,
+      latestContext,
+      ticket.key.mode
+    );
+    if (!controller.acceptResult(ticket, currentKey)) {
       return;
     }
 
+    const suggestions = mergeHybridSuggestions(
+      lexical,
+      semantic,
+      this.settings.maxSuggestions
+    );
+    if (suggestions.length === 0) {
+      hideSuggestions(view);
+      if (notifyWhenEmpty) {
+        new Notice("No relevant link suggestions were found for this context.");
+      }
+      this.setStatus(`ready · ${index.size} notes`);
+      return;
+    }
+    this.showResults(view, currentKey, suggestions, keyboardActive);
+  }
+
+  private showResults(
+    view: EditorView,
+    requestKey: SuggestionRequestKey,
+    suggestions: readonly LexicalSuggestion[],
+    keyboardActive: boolean
+  ): void {
     showSuggestions(view, {
-      requestKey: currentKey,
+      requestKey,
       suggestions,
       selectedIndex: 0,
       keyboardActive
     });
-    this.setStatus(`${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} · ${context.anchor.text}`);
+    this.setStatus(`${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} · ${requestKey.anchorText}`);
   }
 
-  private acceptLexicalSuggestion(
+  private acceptSuggestion(
     view: EditorView,
     popup: SuggestionPopupState,
     suggestion: LexicalSuggestion
   ): void {
     const active = this.controllers.getActive();
-    const sourceFile = this.app.workspace.getActiveFile();
+    const source = this.app.workspace.getActiveFile();
     if (
       active === null
       || active.view !== view
-      || sourceFile === null
-      || sourceFile.path !== popup.requestKey.filePath
+      || source === null
+      || source.path !== popup.requestKey.filePath
       || !isPopupForRequest(view.state, popup.requestKey)
     ) {
       hideSuggestions(view);
       new Notice("The editing context changed before the link could be inserted.");
       return;
     }
-
     const target = this.app.vault.getAbstractFileByPath(suggestion.targetPath);
     if (!isMarkdownFile(target) || this.isExcluded(target)) {
       hideSuggestions(view);
       new Notice("The suggested target is no longer available.");
       return;
     }
-
     hideSuggestions(view);
-    this.applyLexicalSuggestion(active, sourceFile, popup, suggestion);
+    this.applySuggestion(active, source, popup, suggestion);
   }
 
-  private applyLexicalSuggestion(
+  private applySuggestion(
     active: ActiveEditorController,
-    sourceFile: TFile,
+    source: TFile,
     popup: SuggestionPopupState,
     suggestion: LexicalSuggestion
   ): void {
@@ -360,7 +540,7 @@ export default class SemanticLinksPlugin extends Plugin {
         this.app,
         active.view,
         {
-          sourcePath: sourceFile.path,
+          sourcePath: source.path,
           anchorStart: popup.requestKey.anchorStart,
           anchorEnd: popup.requestKey.anchorEnd,
           expectedText: popup.requestKey.anchorText,
@@ -369,20 +549,16 @@ export default class SemanticLinksPlugin extends Plugin {
           displayText: popup.requestKey.anchorText,
           pathMode: this.settings.linkPathMode
         },
-        (message) => {
-          new Notice(message);
-        }
+        (message) => new Notice(message)
       );
     } finally {
       active.controller.endPluginTransaction();
     }
-
     if (!result.ok) {
       new Notice(INSERTION_FAILURE_MESSAGES[result.code]);
-      return;
+    } else {
+      this.setStatus(`linked · ${suggestion.targetTitle}`);
     }
-
-    this.setStatus(`linked · ${suggestion.targetTitle}`);
   }
 
   private readContext(view: EditorView): SuggestionContext | null {
@@ -426,8 +602,11 @@ export default class SemanticLinksPlugin extends Plugin {
   }
 }
 
+function isSemanticContext(value: string): boolean {
+  return value.trim().length >= 24
+    || meaningfulLexicalTokens(value, 5).length >= 5;
+}
+
 function yieldBeforeSearch(): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, 0);
-  });
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

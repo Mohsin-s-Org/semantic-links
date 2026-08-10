@@ -1,4 +1,5 @@
 import {
+  DEFAULT_BACKGROUND_BATCH_SIZE,
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_MAX_SUGGESTIONS,
   SETTINGS_VERSION
@@ -10,11 +11,21 @@ export const DEFAULT_SETTINGS: Readonly<SemanticLinksSettings> = Object.freeze({
   automaticSuggestions: true,
   lexicalMatchingEnabled: true,
   semanticIndexingEnabled: false,
+  semanticModelEnabled: false,
+  semanticModelInstalled: false,
+  semanticThreadMode: "automatic",
+  semanticThreadCount: 0,
+  semanticThreadModelRevision: "",
+  semanticThreadRuntimeVersion: "",
+  semanticThreadDeviceClass: "unknown",
+  backgroundEmbeddingBatchLimit: DEFAULT_BACKGROUND_BATCH_SIZE,
   debounceMs: DEFAULT_DEBOUNCE_MS,
   maxSuggestions: DEFAULT_MAX_SUGGESTIONS,
   minimumConfidence: 0.55,
   excludedFolders: [],
+  excludedFiles: [],
   excludedTags: [],
+  excludedProperties: [],
   linkPathMode: "shortest"
 });
 
@@ -22,6 +33,8 @@ export function createDefaultSettings(): SemanticLinksSettings {
   return {
     ...DEFAULT_SETTINGS,
     excludedFolders: [],
-    excludedTags: []
+    excludedFiles: [],
+    excludedTags: [],
+    excludedProperties: []
   };
 }

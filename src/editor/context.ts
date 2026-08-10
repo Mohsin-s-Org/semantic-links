@@ -4,9 +4,18 @@ import { createContextHash } from "./request-key.ts";
 
 export interface SuggestionContext {
   anchor: TextAnchor;
+  selection: string | null;
+  previousSentence: string | null;
   sentence: string;
+  nextSentence: string | null;
   paragraph: string;
   searchText: string;
+}
+
+interface SentenceRange {
+  start: number;
+  end: number;
+  text: string;
 }
 
 export function extractSuggestionContext(
@@ -15,17 +24,22 @@ export function extractSuggestionContext(
   selectionTo: number,
   cursor: number
 ): SuggestionContext | null {
-  const anchor = selectionFrom === selectionTo
-    ? findTextAnchor(documentText, cursor)
-    : findSelectedAnchor(documentText, selectionFrom, selectionTo);
+  const hasSelection = selectionFrom !== selectionTo;
+  const anchor = hasSelection
+    ? findSelectedAnchor(documentText, selectionFrom, selectionTo)
+    : findTextAnchor(documentText, cursor);
   if (anchor === null) {
     return null;
   }
 
   const paragraph = extractParagraph(documentText, anchor.start, anchor.end, 700);
-  const sentence = extractSentence(paragraph.text, anchor.start - paragraph.start, anchor.end - paragraph.start);
-  const searchText = sentence.length > 0 && sentence !== paragraph.text
-    ? `${sentence}\n${paragraph.text}`
+  const sentences = extractSentenceWindow(
+    paragraph.text,
+    anchor.start - paragraph.start,
+    anchor.end - paragraph.start
+  );
+  const searchText = sentences.active.length > 0 && sentences.active !== paragraph.text
+    ? `${sentences.active}\n${paragraph.text}`
     : paragraph.text;
   return {
     anchor: {
@@ -33,7 +47,10 @@ export function extractSuggestionContext(
       context: searchText,
       contextHash: createContextHash(searchText)
     },
-    sentence,
+    selection: hasSelection ? anchor.text : null,
+    previousSentence: sentences.previous,
+    sentence: sentences.active,
+    nextSentence: sentences.next,
     paragraph: paragraph.text,
     searchText
   };
@@ -89,21 +106,79 @@ function extractParagraph(
   return { start: start + leadingWhitespace, text };
 }
 
-function extractSentence(paragraph: string, anchorStart: number, anchorEnd: number): string {
-  const boundaries = /[.!?؟。！]\s+|\r?\n/gu;
-  let start = 0;
-  let end = paragraph.length;
+function extractSentenceWindow(
+  paragraph: string,
+  anchorStart: number,
+  anchorEnd: number
+): { previous: string | null; active: string; next: string | null } {
+  const ranges = sentenceRanges(paragraph);
+  if (ranges.length === 0) {
+    return { previous: null, active: paragraph.trim(), next: null };
+  }
+  const activeIndex = ranges.findIndex((range) => {
+    return range.end >= anchorStart && range.start <= anchorEnd;
+  });
+  const index = activeIndex === -1
+    ? nearestSentenceIndex(ranges, anchorStart)
+    : activeIndex;
+  return {
+    previous: ranges[index - 1]?.text ?? null,
+    active: ranges[index]?.text ?? paragraph.trim(),
+    next: ranges[index + 1]?.text ?? null
+  };
+}
+
+function sentenceRanges(paragraph: string): SentenceRange[] {
+  const ranges: SentenceRange[] = [];
+  const boundaries = /[!?؟。！]+|\.(?=\s|$|\p{Script=Arabic})|\r?\n+/gu;
+  let segmentStart = 0;
   for (const match of paragraph.matchAll(boundaries)) {
     const boundaryStart = match.index;
     const boundaryEnd = boundaryStart + match[0].length;
-    if (boundaryEnd <= anchorStart) {
-      start = boundaryEnd;
-      continue;
-    }
-    if (boundaryStart >= anchorEnd) {
-      end = boundaryStart + 1;
-      break;
-    }
+    pushSentenceRange(ranges, paragraph, segmentStart, boundaryEnd);
+    segmentStart = boundaryEnd;
   }
-  return paragraph.slice(start, end).trim();
+  pushSentenceRange(ranges, paragraph, segmentStart, paragraph.length);
+  return ranges;
+}
+
+function pushSentenceRange(
+  ranges: SentenceRange[],
+  source: string,
+  start: number,
+  end: number
+): void {
+  let trimmedStart = start;
+  let trimmedEnd = end;
+  while (trimmedStart < trimmedEnd && /\s/u.test(source.charAt(trimmedStart))) {
+    trimmedStart += 1;
+  }
+  while (trimmedEnd > trimmedStart && /\s/u.test(source.charAt(trimmedEnd - 1))) {
+    trimmedEnd -= 1;
+  }
+  if (trimmedStart < trimmedEnd) {
+    ranges.push({
+      start: trimmedStart,
+      end: trimmedEnd,
+      text: source.slice(trimmedStart, trimmedEnd)
+    });
+  }
+}
+
+function nearestSentenceIndex(
+  ranges: readonly SentenceRange[],
+  anchorStart: number
+): number {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  ranges.forEach((range, index) => {
+    const distance = anchorStart < range.start
+      ? range.start - anchorStart
+      : Math.max(0, anchorStart - range.end);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
 }

@@ -59,7 +59,7 @@ export class AdaptiveEmbeddingBatchController {
   private currentSizeValue: number;
   private learnedLimitValue: number;
   private consecutiveFastSlicesValue = 0;
-  private lastActivityAt: number;
+  private lastActivityAt = 0;
 
   constructor(options: AdaptiveEmbeddingBatchControllerOptions = {}) {
     this.policy = resolvePolicy(options.policy);
@@ -70,7 +70,6 @@ export class AdaptiveEmbeddingBatchController {
       this.policy
     );
     this.currentSizeValue = this.policy.minimumSize;
-    this.lastActivityAt = this.now();
   }
 
   get learnedLimit(): number {

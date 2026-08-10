@@ -9,10 +9,7 @@ import {
   MIN_SUGGESTIONS,
   SETTINGS_VERSION
 } from "../constants.ts";
-import type {
-  ThreadDeviceClass,
-  WasmThreadCount
-} from "../embeddings/thread-tuning.ts";
+import type { WasmThreadCount } from "../embeddings/thread-tuning.ts";
 import {
   isRecord,
   readBoolean,

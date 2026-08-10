@@ -11,9 +11,9 @@ test("benchmarks only approved candidates and disposes every client", async () =
   const disposed: number[] = [];
   const progress: string[] = [];
 
-  const result = await runThreadBenchmark(async (threads) => {
+  const result = await runThreadBenchmark((threads) => {
     created.push(threads);
-    return new FakeClient(() => disposed.push(threads));
+    return Promise.resolve(new FakeClient(() => disposed.push(threads)));
   }, 2, new AbortController().signal, {
     sampleCount: 3,
     onProgress: ({ threads, sample }) => progress.push(`${threads}:${sample}`)
@@ -28,12 +28,12 @@ test("benchmarks only approved candidates and disposes every client", async () =
 
 test("continues after one candidate fails", async () => {
   const created: number[] = [];
-  const result = await runThreadBenchmark(async (threads) => {
+  const result = await runThreadBenchmark((threads) => {
     created.push(threads);
     if (threads === 1) {
-      throw new Error("candidate failed");
+      return Promise.reject(new Error("candidate failed"));
     }
-    return new FakeClient();
+    return Promise.resolve(new FakeClient());
   }, 4, new AbortController().signal);
 
   assert.deepEqual(created, [0, 1, 2, 4]);
@@ -50,13 +50,13 @@ test("cancels promptly and disposes the active candidate", async () => {
   let queries = 0;
 
   await assert.rejects(
-    runThreadBenchmark(async () => new FakeClient(
+    runThreadBenchmark(() => Promise.resolve(new FakeClient(
       () => { disposed = true; },
       () => {
         queries += 1;
         controller.abort(new DOMException("cancelled", "AbortError"));
       }
-    ), 4, controller.signal),
+    )), 4, controller.signal),
     /cancelled/u
   );
 
@@ -66,7 +66,7 @@ test("cancels promptly and disposes the active candidate", async () => {
 
 test("validates the repeated sample count", async () => {
   await assert.rejects(
-    runThreadBenchmark(async () => new FakeClient(), 2, new AbortController().signal, {
+    runThreadBenchmark(() => Promise.resolve(new FakeClient()), 2, new AbortController().signal, {
       sampleCount: 2
     }),
     /3 to 7/u

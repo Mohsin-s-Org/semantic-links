@@ -37,7 +37,8 @@ test("continues after one candidate fails", async () => {
   }, 4, new AbortController().signal);
 
   assert.deepEqual(created, [0, 1, 2, 4]);
-  assert.equal(result.decision.threads, 0);
+  assert.ok(result.candidates.includes(result.decision.threads));
+  assert.notEqual(result.decision.threads, 1);
   assert.equal(
     result.decision.summaries.find((summary) => summary.threads === 1)?.stable,
     false

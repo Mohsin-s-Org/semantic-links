@@ -130,7 +130,7 @@ function extractSentenceWindow(
 
 function sentenceRanges(paragraph: string): SentenceRange[] {
   const ranges: SentenceRange[] = [];
-  const boundaries = /[!?؟。！]+|\.(?=\s|$)|\r?\n+/gu;
+  const boundaries = /[!?؟。！]+|\.(?=\s|$|\p{Script=Arabic})|\r?\n+/gu;
   let segmentStart = 0;
   for (const match of paragraph.matchAll(boundaries)) {
     const boundaryStart = match.index;

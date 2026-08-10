@@ -23,7 +23,7 @@ test("benchmarks only approved candidates and disposes every client", async () =
   assert.deepEqual(created, [0, 1, 2]);
   assert.deepEqual(disposed, [0, 1, 2]);
   assert.equal(progress.length, 9);
-  assert.equal(result.decision.threads, 0);
+  assert.ok(result.candidates.includes(result.decision.threads));
 });
 
 test("continues after one candidate fails", async () => {

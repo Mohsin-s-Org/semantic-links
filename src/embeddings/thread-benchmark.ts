@@ -99,7 +99,7 @@ export async function runThreadBenchmark(
         semanticDiagnostics.record(`thread_tuning.batch_${threads}_ms`, batchMs);
         await yieldToEventLoop();
       }
-    } catch (error) {
+    } catch {
       if (signal.aborted) {
         throw abortError(signal);
       }
